@@ -17,6 +17,7 @@ use App\Http\Controllers\Crm\ContactController;
 use App\Http\Controllers\Crm\DealController;
 use App\Http\Controllers\Crm\TaskController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SuperAdmin\AuditController as SuperAuditController;
 use App\Http\Controllers\SuperAdmin\PermissionController as SuperPermissionController;
 use App\Http\Controllers\SuperAdmin\TenantController;
@@ -63,6 +64,11 @@ Route::middleware('auth')->group(function () {
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
         ->middleware('throttle:6,1')
         ->name('verification.send');
+
+    Route::get('/profile', [ProfileController::class, 'show'])->name('profile.show');
+    Route::put('/profile/password', [ProfileController::class, 'updatePassword'])->name('profile.password.update');
+    Route::delete('/profile/sessions/{sessionId}', [ProfileController::class, 'terminateSession'])->name('profile.sessions.destroy');
+    Route::post('/profile/sessions/logout-others', [ProfileController::class, 'logoutOtherSessions'])->name('profile.sessions.logout-others');
 
     Route::prefix('super-admin')
         ->name('super-admin.')

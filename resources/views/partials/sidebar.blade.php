@@ -41,10 +41,17 @@
         @endif
     </nav>
 
-    <form method="POST" action="{{ route('logout') }}" class="px-3 py-3 border-t border-gray-800">
-        @csrf
-        <button type="submit" class="w-full text-left px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-800 hover:text-white">
-            Sign out
-        </button>
-    </form>
+    <div class="px-3 py-3 border-t border-gray-800 space-y-1">
+        <a href="{{ route('profile.show') }}"
+            class="block w-full text-left px-3 py-2 rounded-md text-sm {{ request()->routeIs('profile.*') ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white' }}">
+            My profile
+        </a>
+
+        <form method="POST" action="{{ route('logout') }}">
+            @csrf
+            <button type="submit" class="w-full text-left px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-gray-800 hover:text-white">
+                Sign out
+            </button>
+        </form>
+    </div>
 </aside>
