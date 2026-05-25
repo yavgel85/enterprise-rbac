@@ -71,6 +71,7 @@ Route::middleware('auth')->group(function () {
                 Route::post('users/invite', [UserController::class, 'invite'])->name('users.invite');
                 Route::get('users/{user}', [UserController::class, 'show'])->name('users.show');
                 Route::put('users/{user}/roles', [UserController::class, 'syncRoles'])->name('users.roles.sync');
+                Route::put('users/{user}/unlock', [UserController::class, 'unlock'])->name('users.unlock');
 
                 Route::get('roles', [RoleController::class, 'index'])->name('roles.index');
                 Route::get('roles/create', [RoleController::class, 'create'])->name('roles.create');

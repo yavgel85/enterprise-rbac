@@ -42,4 +42,17 @@ return [
     |--------------------------------------------------------------------------
     */
     'invitation_ttl_days' => env('RBAC_INVITATION_TTL_DAYS', 7),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Account lockout
+    |--------------------------------------------------------------------------
+    | After max_attempts consecutive failed logins for the same email the
+    | account is locked for duration_minutes. Admins with the users.unlock
+    | permission can release the lock from the UI before the timeout.
+    */
+    'lockout' => [
+        'max_attempts' => (int) env('RBAC_LOCKOUT_MAX_ATTEMPTS', 5),
+        'duration_minutes' => (int) env('RBAC_LOCKOUT_DURATION_MINUTES', 15),
+    ],
 ];

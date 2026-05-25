@@ -4,11 +4,39 @@
 
 @section('content')
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div class="lg:col-span-1 bg-white rounded-lg border border-gray-200 shadow-sm p-6 text-sm space-y-3">
-            <div><span class="text-gray-500">Email</span><div class="font-medium">{{ $user->email }}</div></div>
-            <div><span class="text-gray-500">Department</span><div>{{ $user->department?->name ?? '—' }}</div></div>
-            <div><span class="text-gray-500">Status</span><div>{{ $user->is_active ? 'Active' : 'Inactive' }}</div></div>
-            <div><span class="text-gray-500">Last login</span><div>{{ $user->last_login_at?->format('Y-m-d H:i') ?? '—' }}</div></div>
+        <div class="lg:col-span-1 space-y-6">
+            <div class="bg-white rounded-lg border border-gray-200 shadow-sm p-6 text-sm space-y-3">
+                <div><span class="text-gray-500">Email</span><div class="font-medium">{{ $user->email }}</div></div>
+                <div><span class="text-gray-500">Department</span><div>{{ $user->department?->name ?? '—' }}</div></div>
+                <div><span class="text-gray-500">Status</span><div>{{ $user->is_active ? 'Active' : 'Inactive' }}</div></div>
+                <div><span class="text-gray-500">Email verified</span><div>{{ $user->email_verified_at?->format('Y-m-d H:i') ?? '—' }}</div></div>
+                <div><span class="text-gray-500">Last login</span><div>{{ $user->last_login_at?->format('Y-m-d H:i') ?? '—' }}</div></div>
+            </div>
+
+            <div class="bg-white rounded-lg border border-gray-200 shadow-sm p-6 text-sm space-y-3">
+                <h3 class="text-base font-semibold text-gray-900">Security</h3>
+                <div>
+                    <span class="text-gray-500">Failed attempts:</span>
+                    <span class="font-medium">{{ $user->failed_login_attempts }}</span>
+                </div>
+                @if ($user->isLocked())
+                    <div class="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-red-800">
+                        Locked until {{ $user->locked_until->format('Y-m-d H:i') }}
+                    </div>
+                @endif
+
+                @can('unlock', $user)
+                    <form method="POST" action="{{ route('admin.users.unlock', [$tenant, $user]) }}">
+                        @csrf
+                        @method('PUT')
+                        <button type="submit"
+                            class="rounded-md bg-amber-600 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+                            @disabled(! $user->isLocked() && $user->failed_login_attempts === 0)>
+                            Unlock / reset attempts
+                        </button>
+                    </form>
+                @endcan
+            </div>
         </div>
 
         <div class="lg:col-span-2 space-y-6">

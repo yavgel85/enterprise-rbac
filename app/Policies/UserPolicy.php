@@ -51,4 +51,9 @@ final readonly class UserPolicy
     {
         return $this->auth->allows($user, Permission::UsersInvite);
     }
+
+    public function unlock(User $user, User $target): Response
+    {
+        return $this->auth->allows($user, Permission::UsersUnlock, resource: $target);
+    }
 }

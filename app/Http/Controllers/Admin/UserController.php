@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Admin;
 
 use App\Actions\Authorization\AssignRolesToUser;
+use App\Actions\Authorization\UnlockUserAccount;
 use App\Actions\Invitation\InviteUser;
 use App\Http\Controllers\Controller;
 use App\Models\Invitation;
@@ -67,6 +68,15 @@ class UserController extends Controller
         }
 
         return back()->with('status', 'Roles updated.');
+    }
+
+    public function unlock(UnlockUserAccount $unlock, Tenant $tenant, User $user): RedirectResponse
+    {
+        $this->authorize('unlock', $user);
+
+        $unlock->handle(request()->user(), $user);
+
+        return back()->with('status', 'Account unlocked.');
     }
 
     public function invite(Request $request, InviteUser $invite, Tenant $tenant): RedirectResponse

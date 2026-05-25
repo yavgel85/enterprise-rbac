@@ -4,13 +4,6 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
-use App\Listeners\RecordFailedLogin;
-use App\Listeners\RecordLogout;
-use App\Listeners\RecordSuccessfulLogin;
-use Illuminate\Auth\Events\Failed;
-use Illuminate\Auth\Events\Login;
-use Illuminate\Auth\Events\Logout;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
@@ -21,9 +14,8 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        Event::listen(Login::class, RecordSuccessfulLogin::class);
-        Event::listen(Logout::class, RecordLogout::class);
-        Event::listen(Failed::class, RecordFailedLogin::class);
+        // Auth-event listeners (Login/Logout/Failed) are auto-discovered
+        // from app/Listeners by Laravel 11+ via handle() type-hints.
 
         if ($this->app->isProduction()) {
             URL::forceScheme('https');

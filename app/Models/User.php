@@ -28,6 +28,8 @@ class User extends Authenticatable
         'is_active',
         'last_login_at',
         'last_login_ip',
+        'failed_login_attempts',
+        'locked_until',
     ];
 
     protected $hidden = [
@@ -38,6 +40,7 @@ class User extends Authenticatable
     protected $attributes = [
         'is_super_admin' => false,
         'is_active' => true,
+        'failed_login_attempts' => 0,
     ];
 
     protected function casts(): array
@@ -48,7 +51,14 @@ class User extends Authenticatable
             'is_super_admin' => 'boolean',
             'is_active' => 'boolean',
             'last_login_at' => 'datetime',
+            'locked_until' => 'datetime',
+            'failed_login_attempts' => 'integer',
         ];
+    }
+
+    public function isLocked(): bool
+    {
+        return $this->locked_until !== null && $this->locked_until->isFuture();
     }
 
     public function tenant(): BelongsTo

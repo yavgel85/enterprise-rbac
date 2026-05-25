@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -25,6 +26,16 @@ class LoginController extends Controller
             'password' => ['required', 'string'],
         ]);
 
+        $candidate = User::query()->where('email', $credentials['email'])->first();
+
+        if ($candidate?->isLocked()) {
+            throw ValidationException::withMessages([
+                'email' => __('Account is temporarily locked. Try again at :time.', [
+                    'time' => $candidate->locked_until->format('H:i'),
+                ]),
+            ]);
+        }
+
         if (! Auth::attempt($credentials, $request->boolean('remember'))) {
             throw ValidationException::withMessages([
                 'email' => __('Those credentials do not match our records.'),
@@ -41,6 +52,11 @@ class LoginController extends Controller
                 'email' => __('This account is inactive.'),
             ]);
         }
+
+        $user->forceFill([
+            'failed_login_attempts' => 0,
+            'locked_until' => null,
+        ])->save();
 
         if ($user->is_super_admin) {
             return redirect()->route('super-admin.tenants.index');

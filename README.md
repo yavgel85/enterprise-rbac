@@ -388,6 +388,30 @@ vendor/bin/pint --dirty           # только изменённое
 vendor/bin/pint                   # весь проект
 ```
 
-## Лицензия
+## Работа с SQLite с помощбю CLI
 
-MIT.
+1. Открыть SQLite
+```bash
+sqlite3 database/database.sqlite
+```
+
+2. Показать таблицы
+```bash
+.tables
+```
+
+3. Посмотреть структуру таблицы
+```bash
+.schema users
+```
+
+4. Посмотреть данные
+```bash
+.mode table
+SELECT * FROM users;
+```
+
+5. Выйти
+```bash
+.quit
+```

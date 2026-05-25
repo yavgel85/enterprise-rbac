@@ -30,4 +30,17 @@ enum AuditAction: string
 
     case DealApproved = 'deal_approved';
     case TaskCompleted = 'task_completed';
+
+    case AccountLocked = 'account_locked';
+    case AccountUnlocked = 'account_unlocked';
+
+    case PasswordResetRequested = 'password_reset_requested';
+    case PasswordResetCompleted = 'password_reset_completed';
+    case PasswordChangedBySelf = 'password_changed_by_self';
+    case PasswordChangedByAdmin = 'password_changed_by_admin';
+
+    case EmailVerificationSent = 'email_verification_sent';
+    case EmailVerified = 'email_verified';
+
+    case SessionTerminated = 'session_terminated';
 }

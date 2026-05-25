@@ -11,6 +11,8 @@ enum Permission: string
     case UsersUpdate = 'users.update';
     case UsersDelete = 'users.delete';
     case UsersInvite = 'users.invite';
+    case UsersUnlock = 'users.unlock';
+    case UsersSetPassword = 'users.set-password';
 
     case RolesView = 'roles.view';
     case RolesCreate = 'roles.create';
