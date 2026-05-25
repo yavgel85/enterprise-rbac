@@ -76,6 +76,37 @@
                     @endforelse
                 </ul>
             </div>
+
+            @can('setPassword', $user)
+                <form method="POST" action="{{ route('admin.users.password.update', [$tenant, $user]) }}"
+                    class="bg-white rounded-lg border border-gray-200 shadow-sm p-6 space-y-4">
+                    @csrf
+                    @method('PUT')
+                    <div>
+                        <h3 class="text-base font-semibold text-gray-900">Set new password</h3>
+                        <p class="text-xs text-gray-500 mt-1">All sessions of this user will be terminated.</p>
+                    </div>
+
+                    <div>
+                        <label for="set_password" class="block text-sm font-medium text-gray-700">New password</label>
+                        <input id="set_password" name="password" type="password" autocomplete="new-password" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-3 py-2 border">
+                        @error('password') <p class="mt-1 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div>
+                        <label for="set_password_confirmation" class="block text-sm font-medium text-gray-700">Confirm new password</label>
+                        <input id="set_password_confirmation" name="password_confirmation" type="password" autocomplete="new-password" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-3 py-2 border">
+                    </div>
+
+                    <button type="submit"
+                        class="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500"
+                        onclick="return confirm('Force a new password for {{ $user->email }}?')">
+                        Set password
+                    </button>
+                </form>
+            @endcan
         </div>
     </div>
 @endsection

@@ -97,6 +97,7 @@ Route::middleware('auth')->group(function () {
                 Route::get('users/{user}', [UserController::class, 'show'])->name('users.show');
                 Route::put('users/{user}/roles', [UserController::class, 'syncRoles'])->name('users.roles.sync');
                 Route::put('users/{user}/unlock', [UserController::class, 'unlock'])->name('users.unlock');
+                Route::put('users/{user}/password', [UserController::class, 'updatePassword'])->name('users.password.update');
 
                 Route::get('roles', [RoleController::class, 'index'])->name('roles.index');
                 Route::get('roles/create', [RoleController::class, 'create'])->name('roles.create');

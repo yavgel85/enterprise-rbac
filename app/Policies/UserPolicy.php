@@ -56,4 +56,13 @@ final readonly class UserPolicy
     {
         return $this->auth->allows($user, Permission::UsersUnlock, resource: $target);
     }
+
+    public function setPassword(User $user, User $target): Response
+    {
+        if ($user->id === $target->id) {
+            return Response::deny('Use the profile page to change your own password.');
+        }
+
+        return $this->auth->allows($user, Permission::UsersSetPassword, resource: $target);
+    }
 }

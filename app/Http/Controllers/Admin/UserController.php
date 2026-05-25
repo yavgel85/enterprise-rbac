@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Admin;
 
 use App\Actions\Authorization\AssignRolesToUser;
+use App\Actions\Authorization\SetUserPassword;
 use App\Actions\Authorization\UnlockUserAccount;
 use App\Actions\Invitation\InviteUser;
 use App\Http\Controllers\Controller;
@@ -15,6 +16,7 @@ use App\Models\User;
 use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rules\Password;
 use Illuminate\View\View;
 
 class UserController extends Controller
@@ -77,6 +79,23 @@ class UserController extends Controller
         $unlock->handle(request()->user(), $user);
 
         return back()->with('status', 'Account unlocked.');
+    }
+
+    public function updatePassword(Request $request, SetUserPassword $action, Tenant $tenant, User $user): RedirectResponse
+    {
+        $this->authorize('setPassword', $user);
+
+        $payload = $request->validate([
+            'password' => ['required', 'confirmed', Password::defaults()],
+        ]);
+
+        try {
+            $action->handle($request->user(), $user, $payload['password']);
+        } catch (DomainException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        return back()->with('status', 'Password updated. The user has been signed out from all devices.');
     }
 
     public function invite(Request $request, InviteUser $invite, Tenant $tenant): RedirectResponse
