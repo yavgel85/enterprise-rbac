@@ -23,7 +23,15 @@
 - **Sign-in** по email/паролю с rate-limiting (`throttle:6,1`).
 - **Invite-only регистрация**: tenant-admin приглашает пользователя с заранее выбранной ролью и опциональным department; токен инвайта живёт 7 дней (конфигурируется в `config/rbac.php`).
 - **Авто-редирект после логина**: super-admin попадает в платформенную консоль, обычный пользователь — на дашборд своего тенанта.
-- Регистрация логинов/логаутов/неуспешных попыток входа в `audit_logs` через event-listeners.
+- **Password reset by email** — `/forgot-password` → ссылка с одноразовым токеном (TTL 60 мин). Защита от user enumeration (одинаковый ответ для известных и неизвестных email), throttle 5/min, аудит `password_reset_requested` / `password_reset_completed`. После сброса все сессии пользователя инвалидируются.
+- **Email verification (soft mode)** — `User implements MustVerifyEmail`. После логина баннер «Подтвердите email», кнопка _Resend_. Invite/seeders проставляют `email_verified_at = now()` сразу. Аудит `email_verification_sent` / `email_verified`.
+- **Account lockout** — после `rbac.lockout.max_attempts=5` неверных попыток email-аккаунт блокируется на `rbac.lockout.duration_minutes=15` минут (`users.locked_until`). Успешный логин сбрасывает счётчик. Tenant Admin / Super Admin с правом `users.unlock` снимает блокировку из админ-UI. Аудит `account_locked` / `account_unlocked`.
+- **Password policies** — настроены через `Password::defaults()`: production — `min 12 + mixedCase + numbers + symbols + uncompromised (HaveIBeenPwned)`; local/test — `min 8`. Применяется в reset, profile change и admin set-password.
+- **Self-service profile** (`/profile`) — изменить свой пароль (с проверкой текущего), переотправить email-verification, просмотреть активные сессии и завершить отдельную или все «прочие» сессии (`Auth::logoutOtherDevices`). Аудит `password_changed_by_self`, `session_terminated`.
+- **Admin / Super-admin переопределение пароля** — на странице юзера в Admin есть форма _Set new password_. Super Admin может менять кому угодно; Tenant Admin — только пользователям своего тенанта **с ролью уровня ниже своей**, и никогда — super-admin. После смены все сессии цели уничтожаются. Аудит `password_changed_by_admin`.
+- **Security headers** — middleware `SecurityHeaders` в web-стеке (`X-Content-Type-Options`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`; `Strict-Transport-Security` — только в production на HTTPS).
+- **Force HTTPS** — `URL::forceScheme('https')` + `forceRootUrl` в production через `AppServiceProvider::boot()` (редирект 80→443 остаётся ответственностью proxy/web-сервера).
+- Регистрация логинов/логаутов/неуспешных попыток входа в `audit_logs` через event-listeners (Laravel 11+ auto-discovers их по type-hint в `handle()`).
 
 ### Multi-tenancy
 
@@ -217,6 +225,8 @@ php artisan serve
 | `users.update`    | ✓ |   |   |   |   |
 | `users.delete`    | ✓ |   |   |   |   |
 | `users.invite`    | ✓ |   |   |   |   |
+| `users.unlock`    | ✓ |   |   |   |   |
+| `users.set-password` | ✓ |   |   |   |   |
 | `roles.*`         | ✓ |   |   |   |   |
 | `permissions.*`   | ✓ |   |   |   |   |
 | `departments.view`| ✓ | ✓ |   |   |   |
@@ -255,6 +265,8 @@ php artisan serve
 | Создавать/удалять тенанты, переключать фичи | ✓ |   |   |   |   |   |
 | Управлять пользователями, ролями, правами тенанта |   | ✓ |   |   |   |   |
 | Приглашать новых пользователей |   | ✓ |   |   |   |   |
+| **Сбросить блокировку аккаунта** (`Unlock`) | ✓ | ✓ |   |   |   |   |
+| **Принудительно сменить пароль пользователю** | ✓ | ✓ (только нижестоящим в своём тенанте) |   |   |   |   |
 | Создавать departments |   | ✓ |   |   |   |   |
 | Создавать companies / contacts / deals |   | ✓ | ✓ | ✓ |   |   |
 | Удалять CRM-записи |   | ✓ |   |   |   |   |
@@ -320,6 +332,13 @@ php artisan serve
 9. **Feature flag** — у acme audit_export **включён**, у globex **выключен**. `admin@globex.test` нажимает Export CSV → flash error. Super-admin включает фичу в `/super-admin/tenants/globex` — экспорт работает.
 10. **TTL role** — `temp@acme.test` имеет sales только 7 дней. Сделайте `Carbon::setTestNow(now()->addDays(10))` в tinker или вручную поменяйте `expires_at` в БД — пользователь потеряет permissions.
 11. **Inactive user / tenant** — заглушите пользователя (`is_active=false`) или тенанта — все запросы вернут 403 с понятным reason из `TenantAuthorizer`.
+12. **Password reset** — `/forgot-password` → введите `sales@acme.test`. Письмо отправится в `storage/logs/laravel.log` (mailer `log`). Найдите ссылку `/reset-password/{token}?email=...`, откройте — установите новый пароль ≥8 символов. Все сессии пользователя сброшены, в audit `password_reset_requested` + `password_reset_completed`.
+13. **Account lockout** — 5 раз попробуйте войти `sales@acme.test` с неверным паролем → на 6-й попытке login заблокирован до `locked_until`. Войдите как `admin@acme.test`, откройте `Users → Sam Sales`, нажмите _Unlock / reset attempts_ — счётчик сбросился, audit `account_unlocked`.
+14. **Email verification (soft)** — создайте через tinker `User::factory()->unverified()->create()` → войдите им: в layout появится amber-баннер. Нажмите _Resend link_ → письмо в логе. Откройте signed-URL — баннер исчезает.
+15. **Self-service profile** — `/profile` (любой пользователь). Смените свой пароль (нужен текущий). Откройте сайт в другом браузере — это создаст вторую запись в `sessions`. На профиле нажмите _Terminate_ на чужой строке либо _Sign out other devices_ (требует ваш пароль) — те сессии исчезли, текущая жива.
+16. **Admin override password** — войдите как `admin@acme.test`, откройте `Users → Sam Sales → Set new password`. Все сессии Сэма убиты, audit `password_changed_by_admin`. Та же страница для `Mary Manager` (manager) — Mary не видит секцию _Set new password_ (нет права `users.set-password`).
+17. **Tenant Admin escalation guard** — `admin@acme.test` пытается сменить пароль другому tenant-admin того же тенанта — flash-ошибка «Cannot change the password of a user at or above your role level». То же для super-admin аккаунта.
+18. **Security headers** — `curl -sI http://localhost:8000/login` → видны `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`. HSTS отсутствует (т.к. local + HTTP).
 
 ## Структура проекта
 

@@ -69,7 +69,7 @@
 
 ## 1. Безопасность и аутентификация
 
-### 1.1 Password reset flow (P0, S)
+### 1.1 Password reset flow ✅ (P0, S) — _Сделано_
 
 **Проблема.** Сейчас сбросить пароль невозможно — ни из UI, ни из CLI. Любая забывчивость заблокирует пользователя навсегда.
 
@@ -81,11 +81,15 @@
 
 **Acceptance.** Любой пользователь может запросить ссылку на свой email; ссылка работает 60 мин; одноразовая; не работает для `is_active=false`; событие в audit log.
 
-### 1.2 Email verification (P1, S)
+> **Реализовано.** `Auth\PasswordResetController` (4 экшна), throttle 5/min на запросы, generic-ответ против user enumeration, аудит `password_reset_requested`/`password_reset_completed`, на странице логина — ссылка _Forgot password?_, при reset инвалидируются все сессии пользователя и сбрасывается lockout. Pest: `tests/Feature/PasswordResetTest.php`.
+
+### 1.2 Email verification ✅ (P1, S) — _Сделано_
 
 **Проблема.** Поле `email_verified_at` есть, но flow не реализован. Инвайт сразу выставляет verified.
 
 **Что менять.** Реализовать `MustVerifyEmail` на `User`, плюс ручной `resend` для tenant-admin, плюс middleware-блокировка чувствительных действий (например, `users.invite`) пока email не подтверждён.
+
+> **Реализовано (soft mode).** `User implements MustVerifyEmail`, маршруты `verification.notice/verify/send` (signed + throttle), баннер «подтвердите email» в `layouts/app`, страница профиля с кнопкой _Resend verification_. Login доступен и без верификации (soft-режим), но это переключаемо ужесточением middleware. Аудит `email_verification_sent`, `email_verified`. Pest: `tests/Feature/EmailVerificationTest.php`.
 
 ### 1.3 Two-Factor Authentication (P1, M)
 
@@ -105,9 +109,11 @@
 
 Используя `bipassion/webauthn` или `web-auth/webauthn-lib`. Привязка нескольких устройств. Хранить `public_key`, `credential_id`, `sign_count`. UX: `Sign in with passkey`.
 
-### 1.5 Account lockout (P1, S)
+### 1.5 Account lockout ✅ (P1, S) — _Сделано_
 
 После `N` failed login (конфиг `auth.lockout.max=5, decay=15m`) блокировать `User.is_active=false` с автоматическим разблоком через X минут, либо требованием password-reset. Уже есть `throttle:6,1` для IP — добавить **per-account**.
+
+> **Реализовано.** Новые колонки `users.failed_login_attempts`, `users.locked_until` (миграция `add_lockout_fields_to_users_table`). Конфиг `rbac.lockout.max_attempts=5`, `rbac.lockout.duration_minutes=15`. Listener `RecordFailedLogin` инкрементирует счётчик и ставит lock; успешный login сбрасывает оба поля; `LoginController` отказывает в авторизации пока `locked_until` в будущем. Новый permission `users.unlock` + действие `UnlockUserAccount` + кнопка «Unlock / reset attempts» на `admin/users/show`. Аудит `account_locked`, `account_unlocked`. Pest: `tests/Feature/AccountLockoutTest.php`.
 
 ### 1.6 SSO: SAML 2.0 / OIDC (P1, L)
 
@@ -119,21 +125,31 @@
 - На странице логина: если email домена принадлежит тенанту с SSO — редиректить на IdP вместо локального login.
 - JIT-provisioning: при первом логине через SSO создаём `User` с дефолтной ролью (`auth_providers.default_role_id`).
 
-### 1.7 Session management UI (P2, S)
+### 1.7 Session management UI ✅ (P2, S) — _Сделано_
 
 `personal_access_tokens` / `sessions`-таблица: показать активные сессии пользователю с возможностью `Sign out other devices`. Уже есть `last_login_at`/`last_login_ip` — расширить до журнала.
 
-### 1.8 Security headers middleware (P1, S)
+> **Реализовано.** Страница `/profile`: смена своего пароля (с проверкой текущего), resend email-верификации, список активных сессий из таблицы `sessions` с пометкой текущего устройства, кнопка _Terminate_ для отдельной сессии и _Sign out other devices_ (требует пароль). Действие `ChangeOwnPassword` использует `Auth::logoutOtherDevices`, сохраняя текущую сессию. Аудит `password_changed_by_self`, `session_terminated`. Sidebar пополнен ссылкой _My profile_. Pest: `tests/Feature/ProfileTest.php`.
+
+### 1.8 Security headers middleware ✅ (P1, S) — _Сделано_
 
 Добавить middleware `SecurityHeaders` (`Strict-Transport-Security`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Content-Security-Policy` со скриптовым `nonce`). Подключить в `bootstrap/app.php` глобально.
 
-### 1.9 Force HTTPS in production (P0, S)
+> **Реализовано.** `App\Http\Middleware\SecurityHeaders`, добавлен в web-группу через `bootstrap/app.php`. Шлёт `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: strict-origin-when-cross-origin`, расширенный `Permissions-Policy`. `Strict-Transport-Security` устанавливается только в production-окружении на HTTPS-запросах. CSP осознанно отложен — требует аудита inline-стилей Tailwind/Vite. Pest: `tests/Feature/SecurityHeadersTest.php`.
+
+### 1.9 Force HTTPS in production ✅ (P0, S) — _Сделано_
 
 `URL::forceHttps()` в `AppServiceProvider::boot()` если `app()->environment('production')`. Добавить middleware-редирект 301 c http на https.
 
-### 1.10 Password policies (P2, S)
+> **Реализовано.** В `AppServiceProvider::boot()` при `App::isProduction()` вызываются `URL::forceScheme('https')` и `URL::forceRootUrl(config('app.url'))`. 301-редиректы с 80 на 443 оставлены на стороне reverse-proxy/веб-сервера (см. примечание в коммите).
+
+### 1.10 Password policies ✅ (P2, S) — _Сделано (частично)_
 
 Конфиг `auth.password_policy` (min length, complexity, history of 5, max age 90 days). Кастомное правило `Password::default()` + таблица `password_history(user_id, hash, created_at)`.
+
+> **Реализовано.** `Password::defaults()` сконфигурирован per-env в `AppServiceProvider::boot()`: production — `min(12)->mixedCase()->numbers()->symbols()->uncompromised()` (HaveIBeenPwned); local/test — `min(8)` чтобы тесты с короткими паролями работали офлайн. Применяется в reset, profile change и admin set-password. Pest: `tests/Unit/PasswordPolicyTest.php`.
+>
+> _Не реализовано (отдельные задачи):_ history of 5 / max-age 90 (требует новой таблицы `password_history` и периодической force-rotation). Перенесено в будущие итерации.
 
 ---
 
@@ -680,14 +696,29 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 
 ## 12. Сводная таблица приоритетов и roadmap по фазам
 
+### Уже реализовано в этом репозитории
+
+| # | Улучшение | Коммит / артефакт |
+|---|-----------|-------------------|
+| 1.1 | Password reset flow | `feat(auth): self-service password reset via email link` · `Auth\PasswordResetController` + `tests/Feature/PasswordResetTest.php` |
+| 1.2 | Email verification (soft) | `feat(auth): email verification in soft mode` · `Auth\EmailVerificationController` + `tests/Feature/EmailVerificationTest.php` |
+| 1.5 | Account lockout | `feat(security): account lockout after repeated failed logins` · миграция `add_lockout_fields_to_users_table` + `UnlockUserAccount` + `tests/Feature/AccountLockoutTest.php` |
+| 1.7 | Profile + sessions UI | `feat(auth): self-service profile + sessions UI` · `ProfileController` + `ChangeOwnPassword` + `tests/Feature/ProfileTest.php` |
+| 1.8 | Security headers middleware | `feat(security): add SecurityHeaders middleware` · `App\Http\Middleware\SecurityHeaders` + `tests/Feature/SecurityHeadersTest.php` |
+| 1.9 | Force HTTPS in production | `feat(security): force HTTPS scheme in production` · `AppServiceProvider::boot()` |
+| 1.10 | Password policy (per env) | `feat(security): centralize password policy via Password::defaults` · `tests/Unit/PasswordPolicyTest.php` |
+| —    | Admin set user password | `feat(admin): super-admin & tenant-admin can reset user passwords` · `SetUserPassword` + `UserPolicy::setPassword` + `tests/Feature/AdminSetPasswordTest.php` |
+
 ### Сводная таблица
+
+> Реализованные пункты помечены галочкой `✅` в колонке «Улучшение»; их полный перечень — в блоке «Уже реализовано» выше.
 
 | # | Улучшение | Приоритет | Сложность | Фаза |
 |---|-----------|-----------|-----------|------|
-| 1.1 | Password reset | P0 | S | 1 |
-| 1.5 | Account lockout | P1 | S | 1 |
-| 1.8 | Security headers | P1 | S | 1 |
-| 1.9 | Force HTTPS | P0 | S | 1 |
+| 1.1 | Password reset ✅ | P0 | S | 1 |
+| 1.5 | Account lockout ✅ | P1 | S | 1 |
+| 1.8 | Security headers ✅ | P1 | S | 1 |
+| 1.9 | Force HTTPS ✅ | P0 | S | 1 |
 | 4.1 | Redis cache | P0 | S | 1 |
 | 4.2 | Queue worker | P1 | M | 2 |
 | 4.5 | DB indexes review | P1 | S | 1 |
@@ -698,7 +729,7 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 9.1 | Right to erasure | P0 | M | 2 |
 | 9.7 | Backups | P0 | S | 1 |
 | 11.1 | CI/CD pipeline | P0 | S | 1 |
-| 1.2 | Email verification | P1 | S | 2 |
+| 1.2 | Email verification ✅ | P1 | S | 2 |
 | 1.3 | 2FA | P1 | M | 2 |
 | 1.6 | SAML/OIDC SSO | P1 | L | 3 |
 | 2.1 | Wildcard permissions | P1 | M | 2 |
@@ -737,8 +768,8 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 11.5 | Coverage gate | P1 | S | 1 |
 | 11.8 | Telescope/Pulse | P1 | S | 1 |
 | 1.4 | WebAuthn | P2 | L | 4 |
-| 1.7 | Session UI | P2 | S | 3 |
-| 1.10 | Password policies | P2 | S | 2 |
+| 1.7 | Session UI ✅ | P2 | S | 3 |
+| 1.10 | Password policies ✅ | P2 | S | 2 |
 | 2.2 | Permission groups | P2 | S | 3 |
 | 2.5 | Permission diff | P2 | M | 3 |
 | 2.8 | Resource-instance perms | P2 | L | 4 |

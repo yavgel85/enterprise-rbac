@@ -964,7 +964,7 @@ All tests use the helpers + `$this->actingAs(...)`. Total target: **56 tests, �
 - Cache permissions via `database` driver; invalidate via `ForgetUserPermissionsCache` on every role/permission mutation.
 - Tailwind classes only; never inline styles. Stick to: white cards `bg-white rounded-lg border border-gray-200 shadow-sm`; indigo primary buttons; gray-900 sidebar; red destructive; green confirm; status pills with `inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-*`.
 - No `Model::preventLazyLoading()` (causes test fragility).
-- Listeners registered manually in `AppServiceProvider::boot()`, not via `EventServiceProvider` discovery.
+- Auth-event listeners (`RecordSuccessfulLogin` / `RecordLogout` / `RecordFailedLogin`) are **not** manually bound in `AppServiceProvider`; Laravel 11+ auto-discovers them from `app/Listeners/` via the `handle(<Event> $event)` type-hint. Adding `Event::listen(...)` again creates a duplicate subscription.
 
 ---
 
@@ -983,3 +983,162 @@ vendor/bin/pint --dirty
 ```
 
 All three must succeed without errors.
+
+---
+
+## 22. Security & Auth wave (Improvements 1.1, 1.2, 1.5, 1.7-1.10 + Admin password override)
+
+This section is **incremental** on top of sections 1-21. Implement it after the baseline above is green.
+
+### 22.1 New columns and migration
+
+Migration `add_lockout_fields_to_users_table` (one concern, reversible):
+
+```php
+Schema::table('users', function (Blueprint $table): void {
+    $table->unsignedInteger('failed_login_attempts')->default(0)->after('is_active');
+    $table->timestamp('locked_until')->nullable()->after('failed_login_attempts');
+});
+```
+
+Mirror defaults in `User::$attributes` (`failed_login_attempts => 0`) and add casts (`locked_until => 'datetime'`, `failed_login_attempts => 'integer'`). Add both columns to `$fillable`. Add helper `User::isLocked(): bool` returning `locked_until !== null && locked_until->isFuture()`. Make `User` implement `Illuminate\Contracts\Auth\MustVerifyEmail`.
+
+### 22.2 New Permission enum cases
+
+- `UsersUnlock = 'users.unlock'`
+- `UsersSetPassword = 'users.set-password'`
+
+Both are auto-granted to `tenant-admin` (its `permissions: Permission::cases()`). `manager`, `sales`, `auditor`, `viewer` MUST NOT receive them.
+
+### 22.3 New AuditAction enum cases
+
+`AccountLocked`, `AccountUnlocked`, `PasswordResetRequested`, `PasswordResetCompleted`, `PasswordChangedBySelf`, `PasswordChangedByAdmin`, `EmailVerificationSent`, `EmailVerified`, `SessionTerminated`.
+
+### 22.4 `config/rbac.php` additions
+
+```php
+'lockout' => [
+    'max_attempts'     => (int) env('RBAC_LOCKOUT_MAX_ATTEMPTS', 5),
+    'duration_minutes' => (int) env('RBAC_LOCKOUT_DURATION_MINUTES', 15),
+],
+```
+
+### 22.5 `AppServiceProvider::boot()` additions
+
+```php
+if ($this->app->isProduction()) {
+    URL::forceScheme('https');
+    URL::forceRootUrl((string) config('app.url'));
+}
+
+Password::defaults(function (): Password {
+    $rule = Password::min($this->app->isProduction() ? 12 : 8);
+    return $this->app->isProduction()
+        ? $rule->mixedCase()->numbers()->symbols()->uncompromised()
+        : $rule;
+});
+```
+
+### 22.6 New middleware
+
+`App\Http\Middleware\SecurityHeaders` appends to every response:
+
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: SAMEORIGIN`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()`
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` — only on `$request->secure() && App::isProduction()`
+- CSP is intentionally absent (placeholder comment in the middleware).
+
+Register in `bootstrap/app.php` via `$middleware->web(append: [SecurityHeaders::class])`.
+
+### 22.7 New actions (`final readonly class`)
+
+- `App\Actions\Authorization\UnlockUserAccount(User $actor, User $target)` — short-circuits if already cleared, sets `failed_login_attempts=0` + `locked_until=null`, audits `AccountUnlocked` with `unlocked_by`.
+- `App\Actions\Authorization\ChangeOwnPassword(User $user, string $current, string $new)` — `Hash::check` on current (throws `DomainException` if wrong), forceFill new + clear lockout, then `Auth::logoutOtherDevices($new)` to kill peer sessions while keeping the current one alive, audit `PasswordChangedBySelf`.
+- `App\Actions\Authorization\SetUserPassword(User $actor, User $target, string $new)` — denies self, denies cross-tenant unless super-admin, denies target=super-admin unless actor=super-admin, denies actor-level <= target-level, deletes all rows from `sessions` for the target, audit `PasswordChangedByAdmin` with `changed_by` and `is_super_admin_action`.
+
+### 22.8 New controllers
+
+- `App\Http\Controllers\Auth\PasswordResetController` with `requestForm`, `sendLink` (uses `Password::sendResetLink`, returns generic status to avoid email enumeration, audits only when the user exists), `resetForm($token)`, `reset` (uses `Password::reset` callback: forceFill password, rotate `remember_token`, zero lockout fields, fire `PasswordReset` event, delete all `sessions` rows for the user, audit `PasswordResetCompleted`).
+- `App\Http\Controllers\Auth\EmailVerificationController` with `notice`, `verify(EmailVerificationRequest $request)` (calls `markEmailAsVerified`, fires `Verified`, audits `EmailVerified`), `send` (calls `sendEmailVerificationNotification`, audits `EmailVerificationSent`).
+- `App\Http\Controllers\ProfileController` with `show` (loads `sessions` for the user, passes current session id), `updatePassword` (delegates to `ChangeOwnPassword`), `terminateSession($id)` (deletes one `sessions` row scoped to current user, audit `SessionTerminated`), `logoutOtherSessions` (requires the user's current password, deletes every `sessions` row except the current one, audit `SessionTerminated` with `count`).
+
+### 22.9 `UserPolicy` additions
+
+- `unlock(User $user, User $target): Response` → `Permission::UsersUnlock` with resource.
+- `setPassword(User $user, User $target): Response` → denies if `$user === $target`, else `Permission::UsersSetPassword` with resource.
+
+### 22.10 New routes (`routes/web.php`)
+
+Guest group:
+
+- `GET /forgot-password` → `PasswordResetController@requestForm` (name `password.request`)
+- `POST /forgot-password` (throttle 5/min) → `sendLink` (name `password.email`)
+- `GET /reset-password/{token}` → `resetForm` (name `password.reset`)
+- `POST /reset-password` (throttle 5/min) → `reset` (name `password.update`)
+
+Auth group:
+
+- `GET /email/verify` → `EmailVerificationController@notice` (name `verification.notice`)
+- `GET /email/verify/{id}/{hash}` (middleware `signed`, throttle 6/min) → `verify` (name `verification.verify`)
+- `POST /email/verification-notification` (throttle 6/min) → `send` (name `verification.send`)
+- `GET /profile` → `ProfileController@show` (name `profile.show`)
+- `PUT /profile/password` → `updatePassword` (name `profile.password.update`)
+- `DELETE /profile/sessions/{sessionId}` → `terminateSession` (name `profile.sessions.destroy`)
+- `POST /profile/sessions/logout-others` → `logoutOtherSessions` (name `profile.sessions.logout-others`)
+
+Tenant admin group:
+
+- `PUT /t/{tenant}/admin/users/{user}/unlock` → `UserController@unlock` (name `admin.users.unlock`)
+- `PUT /t/{tenant}/admin/users/{user}/password` → `UserController@updatePassword` (name `admin.users.password.update`)
+
+### 22.11 Listener behaviour
+
+`RecordFailedLogin::handle(Failed $event)` does **all** of:
+
+1. Audit `LoginFailed` with `email` metadata.
+2. If a `User` with that email exists: `increment('failed_login_attempts')`.
+3. If new counter `>= rbac.lockout.max_attempts` AND `! isLocked()`: `forceFill(['locked_until' => now()->addMinutes(rbac.lockout.duration_minutes)])->save()` + audit `AccountLocked` with `duration_minutes` and `attempts`.
+
+`LoginController::store` MUST:
+
+1. Validate, then look up `$candidate = User::where('email', $email)->first()`.
+2. If `$candidate?->isLocked()` → throw `ValidationException` with a localized message including `locked_until->format('H:i')`.
+3. Run `Auth::attempt` (fires `Failed` on miss, which the listener handles).
+4. On success: regenerate session, reject inactive users, then `forceFill(['failed_login_attempts' => 0, 'locked_until' => null])->save()` before redirecting.
+
+### 22.12 New views
+
+- `resources/views/auth/passwords/email.blade.php`, `reset.blade.php` — guest layout, Tailwind cards consistent with `auth/login.blade.php`.
+- `resources/views/auth/verify-email.blade.php` — app layout, resend button + sign-out link.
+- `resources/views/profile/show.blade.php` — two-column grid; left column: identity card, optional resend-verification card; right column: change-password form + active sessions list with terminate buttons and a `logout-others` form gated by the user's password.
+- `layouts/guest.blade.php` MUST surface `session('status')`/`session('error')` flash messages.
+- `layouts/app.blade.php` MUST render an amber banner when `auth()->user() instanceof MustVerifyEmail && ! hasVerifiedEmail()`, with a resend form.
+- `partials/sidebar.blade.php` MUST add a `My profile` link above the existing Sign-out form.
+- `admin/users/show.blade.php` MUST render: failed-attempts counter, lock state badge with `locked_until`, an Unlock button gated by `@can('unlock', $user)`, and a `Set new password` form gated by `@can('setPassword', $user)`.
+
+### 22.13 Seeders / factories assumptions
+
+`UserFactory::definition()` continues to populate `email_verified_at => now()`. Both `SuperAdminUserSeeder` and `DemoTenantSeeder` keep their explicit `email_verified_at => now()` so demo users start verified. The invitation flow (`AcceptInvitation`) already sets `email_verified_at => now()` on the new user — keep that.
+
+### 22.14 Pest tests to add
+
+- `tests/Feature/SecurityHeadersTest.php` — baseline headers + no HSTS over plain HTTP.
+- `tests/Unit/PasswordPolicyTest.php` — min length 8 in non-production.
+- `tests/Feature/AccountLockoutTest.php` — 5 fails locks; correct password during lock still blocked; success resets; admin can unlock.
+- `tests/Feature/PasswordResetTest.php` — form shown; link sent + audit; silent on unknown email; reset with valid token logs the user in; tampered token rejected.
+- `tests/Feature/EmailVerificationTest.php` — notice page; redirect when already verified; resend audit; signed link verifies + fires `Verified`; soft-mode login allowed.
+- `tests/Feature/ProfileTest.php` — auth required; password change happy + sad path; sessions list; terminate one session; logout-others removes peers.
+- `tests/Feature/AdminSetPasswordTest.php` — tenant-admin can override sales password (sessions killed + audit); cannot override another tenant-admin; cannot override super-admin; super-admin can override anyone; admin cannot use the admin form on themselves; manager without `users.set-password` gets 403.
+
+### 22.15 Acceptance checklist (delta on top of section 19)
+
+- [ ] `php artisan test --compact` reports >=85 passing tests with the new files above included.
+- [ ] Every response on `/login`, `/forgot-password`, `/profile` carries the four baseline security headers.
+- [ ] In production, `route('login')` renders an `https://...` URL even when the request arrives over HTTP (proxy stripped TLS).
+- [ ] After 5 failed login attempts, the user row has `failed_login_attempts=5` and a future `locked_until`; the next correct attempt still fails with the locked error; an admin with `users.unlock` can clear both fields from `/t/{slug}/admin/users/{user}`.
+- [ ] `/forgot-password` returns the same status for known and unknown emails; only known emails audit `password_reset_requested` and trigger the `ResetPassword` notification.
+- [ ] After a successful password reset OR admin-driven override, every `sessions` row for the user is gone.
+- [ ] `/profile` lists the user's persisted sessions and marks the current one; `Sign out other devices` removes all but the current session and audits `session_terminated`.
+- [ ] `Password::defaults()` in production-like config rejects an 8-character password and accepts a 12-character mixed-case password with digits + symbols (Pest can target this with `App::detectEnvironment(...)` in a focused test if needed).
