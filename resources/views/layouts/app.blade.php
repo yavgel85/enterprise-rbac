@@ -19,6 +19,18 @@
         @endauth
 
         <main class="flex-1 px-6 py-8 max-w-7xl w-full mx-auto">
+            @auth
+                @if (auth()->user() instanceof \Illuminate\Contracts\Auth\MustVerifyEmail && ! auth()->user()->hasVerifiedEmail())
+                    <div class="mb-4 rounded-md bg-amber-50 border border-amber-200 px-4 py-3 text-amber-800 text-sm flex items-center justify-between gap-4">
+                        <span>Please verify your email address to access all features.</span>
+                        <form method="POST" action="{{ route('verification.send') }}">
+                            @csrf
+                            <button type="submit" class="font-semibold text-amber-900 hover:text-amber-700">Resend link</button>
+                        </form>
+                    </div>
+                @endif
+            @endauth
+
             @if (session('status'))
                 <div class="mb-4 rounded-md bg-green-50 border border-green-200 px-4 py-3 text-green-800 text-sm">
                     {{ session('status') }}
