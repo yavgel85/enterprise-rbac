@@ -13,6 +13,7 @@ use Illuminate\Auth\Events\Logout;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Validation\Rules\Password;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -28,5 +29,13 @@ class AppServiceProvider extends ServiceProvider
             URL::forceScheme('https');
             URL::forceRootUrl((string) config('app.url'));
         }
+
+        Password::defaults(function (): Password {
+            $rule = Password::min($this->app->isProduction() ? 12 : 8);
+
+            return $this->app->isProduction()
+                ? $rule->mixedCase()->numbers()->symbols()->uncompromised()
+                : $rule;
+        });
     }
 }
