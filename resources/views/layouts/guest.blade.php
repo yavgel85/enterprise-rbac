@@ -14,6 +14,17 @@
         </div>
     </div>
     <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+        @if (session('status'))
+            <div class="mb-4 rounded-md bg-green-50 border border-green-200 px-4 py-3 text-green-800 text-sm">
+                {{ session('status') }}
+            </div>
+        @endif
+        @if (session('error'))
+            <div class="mb-4 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-red-800 text-sm">
+                {{ session('error') }}
+            </div>
+        @endif
+
         <div class="bg-white px-6 py-10 shadow rounded-xl">
             @yield('content')
         </div>

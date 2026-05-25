@@ -22,9 +22,12 @@
                 class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-3 py-2 border">
         </div>
 
-        <div class="flex items-center">
-            <input id="remember" name="remember" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-indigo-600">
-            <label for="remember" class="ml-2 text-sm text-gray-700">Remember me</label>
+        <div class="flex items-center justify-between">
+            <label class="flex items-center">
+                <input id="remember" name="remember" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-indigo-600">
+                <span class="ml-2 text-sm text-gray-700">Remember me</span>
+            </label>
+            <a href="{{ route('password.request') }}" class="text-sm text-indigo-600 hover:text-indigo-500">Forgot password?</a>
         </div>
 
         <button type="submit" class="w-full flex justify-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-500">
