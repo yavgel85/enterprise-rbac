@@ -143,13 +143,16 @@
 
 > **Реализовано.** В `AppServiceProvider::boot()` при `App::isProduction()` вызываются `URL::forceScheme('https')` и `URL::forceRootUrl(config('app.url'))`. 301-редиректы с 80 на 443 оставлены на стороне reverse-proxy/веб-сервера (см. примечание в коммите).
 
-### 1.10 Password policies ✅ (P2, S) — _Сделано (частично)_
+### 1.10 Password policies ✅ (P2, S) — _Сделано_
 
 Конфиг `auth.password_policy` (min length, complexity, history of 5, max age 90 days). Кастомное правило `Password::default()` + таблица `password_history(user_id, hash, created_at)`.
 
-> **Реализовано.** `Password::defaults()` сконфигурирован per-env в `AppServiceProvider::boot()`: production — `min(12)->mixedCase()->numbers()->symbols()->uncompromised()` (HaveIBeenPwned); local/test — `min(8)` чтобы тесты с короткими паролями работали офлайн. Применяется в reset, profile change и admin set-password. Pest: `tests/Unit/PasswordPolicyTest.php`.
+> **Реализовано.**
 >
-> _Не реализовано (отдельные задачи):_ history of 5 / max-age 90 (требует новой таблицы `password_history` и периодической force-rotation). Перенесено в будущие итерации.
+> - **Min length + complexity.** `Password::defaults()` per-env в `AppServiceProvider::boot()`: production — `min(12)->mixedCase()->numbers()->symbols()->uncompromised()` (HaveIBeenPwned); local/test — `min(8)`. Применяется в reset, profile change, admin set-password, accept invitation. Pest: `tests/Unit/PasswordPolicyTest.php`.
+> - **History of N.** Новая таблица `password_histories(user_id FK cascade, password_hash, created_at, index(user_id, created_at))`. Размер окна — `config('rbac.password_history.size')`, дефолт 5, env `RBAC_PASSWORD_HISTORY_SIZE`; 0 отключает проверку. Action `AssertPasswordNotReused` отвергает совпадение с текущим паролем или с любым из последних N хешей; action `RecordPasswordHistory` пишет новый хеш и обрезает хвост. Подключено ко всем точкам смены пароля: profile, admin override, public reset (pre-flight чтобы не «потратить» reset-токен зря), accept invitation. Pest: `tests/Feature/PasswordHistoryTest.php` (9 кейсов).
+>
+> _Не реализовано (отдельная M-задача):_ **max-age 90 days** требует поля `users.password_changed_at` + middleware/cron, который форсирует ротацию. Это смена UX (модал «срок пароля истёк»), поэтому вынесено в следующую итерацию.
 
 ---
 
@@ -707,6 +710,7 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 1.8 | Security headers middleware | `feat(security): add SecurityHeaders middleware` · `App\Http\Middleware\SecurityHeaders` + `tests/Feature/SecurityHeadersTest.php` |
 | 1.9 | Force HTTPS in production | `feat(security): force HTTPS scheme in production` · `AppServiceProvider::boot()` |
 | 1.10 | Password policy (per env) | `feat(security): centralize password policy via Password::defaults` · `tests/Unit/PasswordPolicyTest.php` |
+| 1.10 | Password history (last N) | `feat(security): password history check` · миграция `create_password_histories_table` + `AssertPasswordNotReused` / `RecordPasswordHistory` + `tests/Feature/PasswordHistoryTest.php` |
 | —    | Admin set user password | `feat(admin): super-admin & tenant-admin can reset user passwords` · `SetUserPassword` + `UserPolicy::setPassword` + `tests/Feature/AdminSetPasswordTest.php` |
 
 ### Сводная таблица

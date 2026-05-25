@@ -1039,6 +1039,54 @@ Password::defaults(function (): Password {
 });
 ```
 
+### 22.5a Password history (extension of 22.5)
+
+Migration `create_password_histories_table` (own concern, reversible):
+
+```php
+Schema::create('password_histories', function (Blueprint $table): void {
+    $table->id();
+    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+    $table->string('password_hash');
+    $table->timestamp('created_at')->nullable()->index();
+    $table->index(['user_id', 'created_at']);
+});
+```
+
+Model `App\Models\PasswordHistory` (`$timestamps = false`, fillable `user_id`/`password_hash`/`created_at`, cast `created_at => datetime`, `belongsTo(User::class)`). Relation `User::passwordHistories(): HasMany` returns `->latest('created_at')`.
+
+Config:
+
+```php
+'password_history' => [
+    'size' => (int) env('RBAC_PASSWORD_HISTORY_SIZE', 5),
+],
+```
+
+Two actions (`final readonly class`):
+
+- `App\Actions\Authorization\AssertPasswordNotReused::handle(User $user, string $candidate)` — short-circuit to no-op when `size <= 0`; otherwise throw `DomainException` if `Hash::check($candidate, $user->password)` is true, or if the candidate matches any of the latest `size` rows in `password_histories` (loop, not SQL — bcrypt hashes are not directly comparable).
+- `App\Actions\Authorization\RecordPasswordHistory::handle(User $user, string $raw)` — no-op when `size <= 0`; insert `(user_id, Hash::make($raw), now())` and `DELETE FROM password_histories WHERE user_id=? AND id NOT IN (latest $size ids)`.
+
+Wire both into every entry point that sets a password:
+
+1. **`ChangeOwnPassword::handle`** — call `AssertPasswordNotReused` after the current-password check and `RecordPasswordHistory` after `forceFill->save()`, before `Auth::logoutOtherDevices`.
+2. **`SetUserPassword::handle`** — call `AssertPasswordNotReused` after the escalation checks and `RecordPasswordHistory` inside the same `DB::transaction` after `forceFill->save()` and before `DB::table('sessions')->delete()`.
+3. **`PasswordResetController::reset`** — call `AssertPasswordNotReused` **before** invoking `Password::reset` (look up the user by email; if the user does not exist, skip silently to preserve the no-enumeration behaviour). On reuse: return `back()->withErrors(['password' => $message])->withInput(['email'])` so the one-time reset token is **not** spent. Inside the `Password::reset` callback call `RecordPasswordHistory` after the user has been re-saved.
+4. **`AcceptInvitation::handle`** — call `RecordPasswordHistory($user, $payload['password'])` inside the transaction after the `User::create` row exists (so the invitation password counts as the first history entry).
+
+Tests live in `tests/Feature/PasswordHistoryTest.php` (9 cases):
+
+- record + prune to N
+- current password rejected as reuse
+- recently used password rejected
+- password that fell outside the window is accepted again
+- `size = 0` disables the check (records nothing, asserts nothing)
+- profile change blocked on reuse, current hash unchanged
+- admin override blocked on reuse, current hash unchanged
+- reset endpoint blocks on reuse without spending the token (then succeeds with a fresh password using the same token)
+- invitation acceptance records the initial password
+
 ### 22.6 New middleware
 
 `App\Http\Middleware\SecurityHeaders` appends to every response:
@@ -1134,7 +1182,7 @@ Tenant admin group:
 
 ### 22.15 Acceptance checklist (delta on top of section 19)
 
-- [ ] `php artisan test --compact` reports >=85 passing tests with the new files above included.
+- [ ] `php artisan test --compact` reports >=95 passing tests with the new files above included.
 - [ ] Every response on `/login`, `/forgot-password`, `/profile` carries the four baseline security headers.
 - [ ] In production, `route('login')` renders an `https://...` URL even when the request arrives over HTTP (proxy stripped TLS).
 - [ ] After 5 failed login attempts, the user row has `failed_login_attempts=5` and a future `locked_until`; the next correct attempt still fails with the locked error; an admin with `users.unlock` can clear both fields from `/t/{slug}/admin/users/{user}`.
@@ -1142,3 +1190,6 @@ Tenant admin group:
 - [ ] After a successful password reset OR admin-driven override, every `sessions` row for the user is gone.
 - [ ] `/profile` lists the user's persisted sessions and marks the current one; `Sign out other devices` removes all but the current session and audits `session_terminated`.
 - [ ] `Password::defaults()` in production-like config rejects an 8-character password and accepts a 12-character mixed-case password with digits + symbols (Pest can target this with `App::detectEnvironment(...)` in a focused test if needed).
+- [ ] After changing a user's password to `X`, attempting to change it back to `X` (or to any of the previous `rbac.password_history.size` hashes) is rejected on the same flow (profile, admin override, public reset) with a human-readable error and **no** database mutation.
+- [ ] On a rejected public reset, the one-time `password_reset_tokens` row is preserved — the same URL/token can immediately be reused with a different (non-recycled) password.
+- [ ] Setting `RBAC_PASSWORD_HISTORY_SIZE=0` completely disables history checks and stops writing to `password_histories` (existing rows remain but are ignored).
