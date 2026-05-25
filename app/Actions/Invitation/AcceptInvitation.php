@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Actions\Invitation;
 
 use App\Actions\Audit\LogAuditEvent;
+use App\Actions\Authorization\RecordPasswordHistory;
 use App\Enums\AuditAction;
 use App\Models\Invitation;
 use App\Models\User;
@@ -14,7 +15,10 @@ use Illuminate\Support\Facades\Hash;
 
 final readonly class AcceptInvitation
 {
-    public function __construct(private LogAuditEvent $audit) {}
+    public function __construct(
+        private LogAuditEvent $audit,
+        private RecordPasswordHistory $recordHistory,
+    ) {}
 
     /**
      * @param  array{name: string, password: string}  $payload
@@ -42,6 +46,8 @@ final readonly class AcceptInvitation
                     'assigned_at' => now(),
                 ]);
             }
+
+            $this->recordHistory->handle($user, $payload['password']);
 
             $invitation->update(['accepted_at' => now()]);
 

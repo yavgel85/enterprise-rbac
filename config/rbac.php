@@ -55,4 +55,17 @@ return [
         'max_attempts' => (int) env('RBAC_LOCKOUT_MAX_ATTEMPTS', 5),
         'duration_minutes' => (int) env('RBAC_LOCKOUT_DURATION_MINUTES', 15),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Password history
+    |--------------------------------------------------------------------------
+    | When set to N > 0, every password-change action (self, reset, admin
+    | override, invitation acceptance) appends a row to password_histories
+    | and rejects new passwords that match any of the last N hashes.
+    | Set to 0 to disable history checks entirely.
+    */
+    'password_history' => [
+        'size' => (int) env('RBAC_PASSWORD_HISTORY_SIZE', 5),
+    ],
 ];

@@ -13,7 +13,11 @@ use Illuminate\Support\Facades\Hash;
 
 final readonly class SetUserPassword
 {
-    public function __construct(private LogAuditEvent $audit) {}
+    public function __construct(
+        private LogAuditEvent $audit,
+        private AssertPasswordNotReused $assertNotReused,
+        private RecordPasswordHistory $recordHistory,
+    ) {}
 
     public function handle(User $actor, User $target, string $newPassword): void
     {
@@ -38,12 +42,16 @@ final readonly class SetUserPassword
             }
         }
 
+        $this->assertNotReused->handle($target, $newPassword);
+
         DB::transaction(function () use ($actor, $target, $newPassword): void {
             $target->forceFill([
                 'password' => Hash::make($newPassword),
                 'failed_login_attempts' => 0,
                 'locked_until' => null,
             ])->save();
+
+            $this->recordHistory->handle($target, $newPassword);
 
             DB::table('sessions')->where('user_id', $target->id)->delete();
 

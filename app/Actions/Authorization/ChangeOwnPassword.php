@@ -13,7 +13,11 @@ use Illuminate\Support\Facades\Hash;
 
 final readonly class ChangeOwnPassword
 {
-    public function __construct(private LogAuditEvent $audit) {}
+    public function __construct(
+        private LogAuditEvent $audit,
+        private AssertPasswordNotReused $assertNotReused,
+        private RecordPasswordHistory $recordHistory,
+    ) {}
 
     public function handle(User $user, string $currentPassword, string $newPassword): void
     {
@@ -21,11 +25,15 @@ final readonly class ChangeOwnPassword
             throw new DomainException('Current password is incorrect.');
         }
 
+        $this->assertNotReused->handle($user, $newPassword);
+
         $user->forceFill([
             'password' => Hash::make($newPassword),
             'failed_login_attempts' => 0,
             'locked_until' => null,
         ])->save();
+
+        $this->recordHistory->handle($user, $newPassword);
 
         // Sign other devices out, keep the current session alive.
         Auth::logoutOtherDevices($newPassword);
