@@ -46,8 +46,14 @@
 - **42 атомарных permission** в формате `module.action`, описанных как **PHP enum** `App\Enums\Permission` — type-safe, IDE-friendly, синхронизируются в БД сидером.
 - **5 системных ролей** (`tenant-admin`, `manager`, `sales`, `auditor`, `viewer`) с уровнями (`level: 0-100`) для предотвращения privilege escalation.
 - **Несколько ролей у одного пользователя** + **TTL** через `role_user.expires_at`.
+- **JIT / time-bound elevated access** — tenant-admin выдаёт пользователю **временную роль на N часов** (`GrantTemporaryRole`), не трогая постоянные назначения; права исчезают автоматически по истечении срока.
+- **Role inheritance** — `roles.parent_id` (self-FK): роль наследует permissions всей цепочки родителей (`viewer ← sales ← manager ← tenant-admin`). Резолвер обходит предков с защитой от циклов; `SetRoleParent` валидирует self/cross-tenant/cycle.
+- **Wildcard permissions** — `module.*` (флаг `permissions.is_wildcard`) компактно выдаёт все права модуля; раскрываются в конкретные slug-и в резолвере, `deny` по-прежнему перебивает отдельный slug внутри wildcard.
+- **Permission bundles** — `permission_groups` + UI «Apply a permission bundle» аддитивно домерживают готовый набор прав к роли.
 - **Direct permissions per user** с типами `grant` / `deny` и TTL — `deny` всегда побеждает `grant` из роли (см. `ResolveUserPermissions`).
-- **Custom roles per tenant** — tenant-admin создаёт свои роли (с `level < собственного`) и собирает их из permissions, которыми сам владеет.
+- **Custom roles per tenant** — tenant-admin создаёт свои роли (с `level < собственного`) и собирает их из permissions, которыми сам владеет; либо **клонирует** существующую роль (`CloneRole`, кнопка «Clone») в редактируемую копию на уровень ниже.
+- **Permission preview / impact** — на странице роли live-индикатор «Unsaved: +N / −M», diff применённых изменений и список затронутых пользователей.
+- **Usage tracking** — команда `php artisan rbac:usage` и каталог super-admin показывают по каждому праву число ролей/прямых выдач и количество отказов за окно (дефолт 30 дней), подсвечивая «мёртвые» permissions.
 - **Separation of duties** — конфигурируемые `forbidden_role_pairs` в `config/rbac.php` (например, нельзя совмещать `auditor` + `tenant-admin`).
 - **Гибридная авторизация**: `Gate::before` для super-admin → Policies возвращают `Response::allow()/deny('reason')` → каждая Policy делегирует в `TenantAuthorizer`, который проверяет 6 уровней (super → user active → tenant active → cross-tenant → permission → контекстные правила).
 - **Кэш permissions** на user/tenant в `cache.store=database`, TTL настраивается, автоматическая инвалидация при изменениях ролей/прямых permissions.
@@ -341,6 +347,13 @@ php artisan serve
 17. **Tenant Admin escalation guard** — `admin@acme.test` пытается сменить пароль другому tenant-admin того же тенанта — flash-ошибка «Cannot change the password of a user at or above your role level». То же для super-admin аккаунта.
 18. **Security headers** — `curl -sI http://localhost:8000/login` → видны `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`. HSTS отсутствует (т.к. local + HTTP).
 19. **Password history** — `admin@acme.test` смените пароль `sales@acme.test` на `new-strong-pw-1`. Попробуйте затем сменить ему пароль на тот же `new-strong-pw-1` → flash error «must differ from your last 5 passwords». Смените ещё 4 раза на разные пароли, потом верните `new-strong-pw-1` → теперь пройдёт (выпал из окна). Аналогично работает в `/profile` (нужен текущий пароль) и `/forgot-password` (proof: при отказе по history token не тратится — можно повторить тот же URL с другим паролем).
+20. **Role inheritance** — `admin@acme.test` → `Roles → New role`, создайте роль уровня 5 без прав. На странице роли в карточке _Inheritance_ выберите родителя `Viewer` → сохраните. Назначьте роль пользователю — он получит все viewer-права. Попробуйте сделать родителем роль, которая уже её потомок → flash об ошибке цикла.
+21. **Wildcard permission** — на странице любой кастомной роли отметьте чекбокс `deals.* (grant all)` → сохраните. Пользователь с этой ролью получит все 6 `deals.*` прав. Затем выдайте ему прямой `deny` на `deals.delete` (`Direct permissions`) — удаление сделок снова запрещено, остальные `deals.*` работают.
+22. **Permission bundle** — на странице кастомной роли выберите бандл `CRM — read only` → _Apply bundle_. К текущим правам добавятся все `*.view`, ничего не удаляется.
+23. **JIT temporary role** — `admin@acme.test` → `Users → Sam Sales`, блок _Grant temporary (JIT) role_: выдайте `Manager` на 1 час. Рядом с ролью появится бейдж «expires …». В tinker `Carbon::setTestNow(now()->addHours(2))` + `cache:clear` — Сэм теряет manager-права, sales остаётся.
+24. **Permission diff / impact** — откройте роль, у которой есть пользователи: справа панель _Impact_ с их списком. Поменяйте чекбоксы — заголовок покажет «Unsaved: +N / −M». Сохраните → блок _Last change_ перечислит добавленные/удалённые slug-и.
+25. **Clone role** — `Roles → Clone` напротив `Manager` → создаётся редактируемая копия уровнем ниже с теми же правами; вы попадёте в её редактор.
+26. **Usage report** — `php artisan rbac:usage` в терминале (таблица по правам). В UI super-admin откройте `Permissions` — столбцы Roles / Direct users / Denied и подсветка невыданных прав. Сгенерируйте отказ (зайдите ролью без `deals.delete` и попробуйте удалить сделку), запустите `rbac:usage` ещё раз — счётчик Denied у `deals.delete` вырастет.
 
 ## Структура проекта
 
@@ -392,8 +405,15 @@ php artisan migrate:fresh --seed
 # только применить новые миграции
 php artisan migrate
 
-# пересоздать каталог permissions из enum App\Enums\Permission
+# пересоздать каталог permissions из enum App\Enums\Permission (включая wildcard module.*)
 php artisan db:seed --class=Database\\Seeders\\PermissionSeeder
+
+# пересоздать глобальные permission-бандлы
+php artisan db:seed --class=Database\\Seeders\\PermissionGroupSeeder
+
+# отчёт по использованию permissions (роли/прямые выдачи/отказы); --unused — только невыданные
+php artisan rbac:usage
+php artisan rbac:usage --unused
 
 # список всех роутов
 php artisan route:list

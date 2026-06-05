@@ -158,7 +158,7 @@
 
 ## 2. Авторизация и RBAC: расширения модели
 
-### 2.1 Wildcard permissions (P1, M)
+### 2.1 Wildcard permissions ✅ (P1, M) — _Сделано_
 
 **Зачем.** Сейчас, чтобы дать "всё по deals", нужно отметить 6 чекбоксов. Wildcard `deals.*` позволит компактно описать "module-wide".
 
@@ -168,11 +168,15 @@
 - В seed добавить wildcard для каждого модуля.
 - UI: в редакторе роли выделить wildcard-чекбокс — "give all".
 
-### 2.2 Permission groups / bundles (P2, S)
+> **Реализовано.** Колонка `permissions.is_wildcard` (миграция `add_is_wildcard_to_permissions_table`), `PermissionSeeder` создаёт по одной wildcard-записи `module.*` на каждый модуль. В enum `App\Enums\Permission` добавлены `modules()`, `wildcardSlugs()`, `isWildcard()`, `expandWildcards()`. `ResolveUserPermissions` раскрывает wildcard в конкретные slug-и на стороне grant и deny, так что кэш остаётся плоской map — `TenantAuthorizer` не меняется и deny-override продолжает работать поверх wildcard. `SyncRolePermissions` принимает `module.*` и для не-супер-админа проверяет, что актёр владеет всеми конкретными правами, в которые раскрывается wildcard. UI: в редакторе роли на каждый модуль добавлен чекбокс «`module.*` (grant all)». Pest: `tests/Feature/WildcardPermissionTest.php`.
+
+### 2.2 Permission groups / bundles ✅ (P2, S) — _Сделано_
 
 Сущность `permission_groups(slug, name)` + pivot `permission_group_permission`. UI позволяет назначать роли сразу группу — облегчает повседневный admin.
 
-### 2.3 Role inheritance (P1, L)
+> **Реализовано.** Таблицы `permission_groups(tenant_id nullable, slug, name, description)` и `permission_group_permission`, модель `PermissionGroup`. `PermissionGroupSeeder` заводит 4 глобальных бандла (`crm-read-only`, `crm-full`, `user-administration`, `audit-access`). Действие `ApplyPermissionGroupToRole` аддитивно домерживает права бандла к роли, переиспользуя все гарды `SyncRolePermissions` (защита системных ролей и «нельзя выдать то, чем не владеешь»). UI: на странице редактирования роли — селектор «Apply a permission bundle». Pest: `tests/Feature/PermissionGroupTest.php`.
+
+### 2.3 Role inheritance ✅ (P1, L) — _Сделано_
 
 **Зачем.** Сейчас 5 ролей не наследуются: `tenant-admin` всё перечисляет вручную. Введение `roles.parent_id` (nullable) → permission resolver рекурсивно собирает permissions из цепочки родителей.
 
@@ -181,6 +185,8 @@
 - Защита от циклов (depth limit + check в action).
 - `ResolveUserPermissions::resolve`: загрузить роли + всех предков, объединить permissions.
 - `RoleRegistry`: `manager.parent_slug = 'sales'`, `tenant-admin.parent_slug = 'manager'` и т.д.
+
+> **Реализовано.** Миграция `add_parent_id_to_roles_table` (self-FK, `nullOnDelete`). `Role::selfAndAncestors()` и `ResolveUserPermissions::roleClosureIds()` обходят цепочку родителей с защитой от циклов и depth-limit 20. `RoleDefinition` получил `parentSlug`; `RoleRegistry` задаёт цепочку **viewer ← sales ← manager ← tenant-admin** (auditor — без родителя), а `BootstrapTenant` во втором проходе проставляет `parent_id`. Явные списки прав системных ролей оставлены без изменений (наследование аддитивно, union тот же → нулевой риск регрессии). Cycle-safe `SetRoleParent` валидирует self/cross-tenant/cycle и сбрасывает кэш для роли и всех её потомков. UI: карточка «Inheritance» с селектором родителя в редакторе роли. Pest: `tests/Feature/RoleInheritanceTest.php`.
 
 ### 2.4 Resource-based / ABAC layer (P1, L)
 
@@ -202,9 +208,13 @@
 
 Класс `ConditionEvaluator::satisfies($context, $conditions): bool`. Используется в `TenantAuthorizer` после проверки прав.
 
-### 2.5 Permission preview / diff (P2, M)
+> ⏳ _Отложено в этой итерации (L)._ Решено реализовывать как **аддитивный** слой (hardcoded-правила в Policy остаются, ABAC — дополнительный гейт; пустые conditions не меняют поведение), но из-за объёма вынесено в отдельный спринт.
+
+### 2.5 Permission preview / diff ✅ (P2, M) — _Сделано_
 
 UI на странице редактирования роли показывает **разницу** между текущим и сохраняемым набором + список пользователей с этой ролью, которые после save потеряют/приобретут доступ. Запрос-эффект → меньше ошибок.
+
+> **Реализовано.** На странице редактирования роли: (1) клиентский индикатор «Unsaved: +N / −M», сравнивающий чекбоксы с исходным состоянием в реальном времени; (2) после сохранения сервер отдаёт точный diff `perm_diff` (added/removed) и отрисовывает блок «Last change» с зелёными/красными slug-ами; (3) панель «Impact» со счётчиком и списком затронутых пользователей (поскольку sync немедленно пересчитывает их доступ). Pest: `tests/Feature/PermissionDiffTest.php`.
 
 ### 2.6 Approval workflows (P1, L)
 
@@ -216,21 +226,31 @@ UI на странице редактирования роли показыва�
 - DealController.approve: если `deal.amount >= threshold` → создаёт `ApprovalRequest` и помещает deal в стадию `approval_pending` вместо немедленного approve.
 - UI: вкладка "Approvals queue" в admin меню.
 
-### 2.7 Time-bound elevated access (P1, M)
+> ⏳ _Отложено в этой итерации (L)._ Согласованная модель: порог из конфига (дефолт $100k), 2 шага по ролям `manager → tenant-admin`, сделки ниже порога одобряются сразу как сейчас.
+
+### 2.7 Time-bound elevated access ✅ (P1, M) — _Сделано_
 
 Аналог `sudo`/JIT-access. Tenant-admin может выдать пользователю **временную роль** на N часов (уже есть `expires_at` в `role_user` — нужно UI и `expires_in` UX).
+
+> **Реализовано.** Действие `GrantTemporaryRole` добавляет **одну** роль через `syncWithoutDetaching` с `expires_at = now()->addHours(N)`, не трогая постоянные назначения; проверяет минимум 1 час, уровень актёра и separation-of-duties для результирующего набора, сбрасывает кэш и пишет аудит `roles_assigned` с флагом `temporary`. Resolver уже отбрасывает протухшие назначения, поэтому права исчезают автоматически. UI: на `admin/users/show` блок «Grant temporary (JIT) role» (роль + часы) и бейдж «expires …» рядом с временными ролями. Pest: `tests/Feature/TemporaryRoleTest.php`.
 
 ### 2.8 Custom permission per resource instance (P2, L)
 
 ReBAC-стиль: дать пользователю Виктору доступ к **конкретному** deal #123. Таблица `resource_permissions(user_id, permission_id, resource_type, resource_id, expires_at)`. Расширить `TenantAuthorizer::allows` четвёртой стадией — instance permission.
 
-### 2.9 Permission audit / unused tracking (P2, M)
+> ⏳ _Отложено в этой итерации (L)._ Задумано как аддитивная 4-я стадия авторизатора (instance-grant только расширяет доступ, не запрещает).
+
+### 2.9 Permission audit / unused tracking ✅ (P2, M) — _Сделано_
 
 Cron-команда `rbac:usage` — раз в день сканирует `audit_logs.permission_denied` за 30 дней и в `super-admin/permissions` показывает usage stats (`granted X users · checked N times · denied M times`). Помогает чистить мёртвые permissions.
 
-### 2.10 Custom roles per tenant: cloning system role (P2, S)
+> **Реализовано.** Действие `PermissionUsageReport` считает по каждому slug: число ролей, число прямых grant-ов и число `permission_denied` за окно `config('rbac.usage.window_days')` (дефолт 30); результат кэшируется. Консольная команда `rbac:usage` (флаг `--unused`) печатает таблицу и помечает права, не выданные никому. Каталог `super-admin/permissions` переведён на таблицу со столбцами Roles / Direct users / Denied и подсветкой «unused» (amber) и wildcard-меток. Pest: `tests/Feature/PermissionUsageTest.php`. _Примечание:_ «checked N times» намеренно не логируется (слишком дорого на каждый чек) — вместо него показываем denied-метрику.
+
+### 2.10 Custom roles per tenant: cloning system role ✅ (P2, S) — _Сделано_
 
 Добавить кнопку "Clone from `manager`" в `roles/create` — создаёт новую роль с теми же permissions, но `is_system=false` и `level < own`.
+
+> **Реализовано.** Действие `CloneRole` создаёт `is_system=false` роль с `level = source.level - 1` (или override), копирует permissions и `parent_id`, проверяет уникальность slug и уровень актёра. UI: кнопка «Clone» в строке каждой роли на `admin/roles/index` и блок «Clone an existing role» на `admin/roles/create`; после клонирования — редирект в редактор новой роли. Pest: `tests/Feature/CloneRoleTest.php`.
 
 ---
 
@@ -712,6 +732,13 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 1.10 | Password policy (per env) | `feat(security): centralize password policy via Password::defaults` · `tests/Unit/PasswordPolicyTest.php` |
 | 1.10 | Password history (last N) | `feat(security): password history check` · миграция `create_password_histories_table` + `AssertPasswordNotReused` / `RecordPasswordHistory` + `tests/Feature/PasswordHistoryTest.php` |
 | —    | Admin set user password | `feat(admin): super-admin & tenant-admin can reset user passwords` · `SetUserPassword` + `UserPolicy::setPassword` + `tests/Feature/AdminSetPasswordTest.php` |
+| 2.1 | Wildcard permissions | `feat(rbac): module.* wildcard permissions` · миграция `add_is_wildcard_to_permissions_table` + `Permission::expandWildcards` + `tests/Feature/WildcardPermissionTest.php` |
+| 2.2 | Permission groups / bundles | `feat(rbac): permission bundles applied to roles` · `permission_groups` + `ApplyPermissionGroupToRole` + `tests/Feature/PermissionGroupTest.php` |
+| 2.3 | Role inheritance | `feat(rbac): role inheritance via parent_id` · миграция `add_parent_id_to_roles_table` + `SetRoleParent` + resolver ancestor-walk + `tests/Feature/RoleInheritanceTest.php` |
+| 2.5 | Permission preview / diff | `feat(rbac): role edit impact + permission diff` · `RoleController::syncPermissions` diff + impact panel + `tests/Feature/PermissionDiffTest.php` |
+| 2.7 | Time-bound elevated access | `feat(rbac): JIT temporary role grants` · `GrantTemporaryRole` + users.show UI + `tests/Feature/TemporaryRoleTest.php` |
+| 2.9 | Permission usage tracking | `feat(rbac): rbac:usage report + catalog stats` · `PermissionUsageReport` + `rbac:usage` command + `tests/Feature/PermissionUsageTest.php` |
+| 2.10 | Clone system role | `feat(rbac): clone roles into editable copies` · `CloneRole` + roles index/create UI + `tests/Feature/CloneRoleTest.php` |
 
 ### Сводная таблица
 
@@ -736,11 +763,11 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 1.2 | Email verification ✅ | P1 | S | 2 |
 | 1.3 | 2FA | P1 | M | 2 |
 | 1.6 | SAML/OIDC SSO | P1 | L | 3 |
-| 2.1 | Wildcard permissions | P1 | M | 2 |
-| 2.3 | Role inheritance | P1 | L | 3 |
+| 2.1 | Wildcard permissions ✅ | P1 | M | 2 |
+| 2.3 | Role inheritance ✅ | P1 | L | 3 |
 | 2.4 | ABAC layer | P1 | L | 3 |
 | 2.6 | Approval workflows | P1 | L | 3 |
-| 2.7 | Time-bound elevated access | P1 | M | 2 |
+| 2.7 | Time-bound elevated access ✅ | P1 | M | 2 |
 | 3.1 | Diff visualization | P1 | M | 2 |
 | 3.2 | Audit filters | P1 | S | 1 |
 | 3.4 | Audit retention/archive | P1 | M | 2 |
@@ -774,11 +801,11 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 1.4 | WebAuthn | P2 | L | 4 |
 | 1.7 | Session UI ✅ | P2 | S | 3 |
 | 1.10 | Password policies ✅ | P2 | S | 2 |
-| 2.2 | Permission groups | P2 | S | 3 |
-| 2.5 | Permission diff | P2 | M | 3 |
+| 2.2 | Permission groups ✅ | P2 | S | 3 |
+| 2.5 | Permission diff ✅ | P2 | M | 3 |
 | 2.8 | Resource-instance perms | P2 | L | 4 |
-| 2.9 | Permission usage tracking | P2 | M | 3 |
-| 2.10 | Role cloning | P2 | S | 2 |
+| 2.9 | Permission usage tracking ✅ | P2 | M | 3 |
+| 2.10 | Role cloning ✅ | P2 | S | 2 |
 | 3.3 | Sentry/Datadog | P1 | S | 2 |
 | 3.5 | Per-tenant audit sinks | P2 | M | 3 |
 | 3.8 | Real-time activity feed | P2 | M | 3 |

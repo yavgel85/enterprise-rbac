@@ -1193,3 +1193,103 @@ Tenant admin group:
 - [ ] After changing a user's password to `X`, attempting to change it back to `X` (or to any of the previous `rbac.password_history.size` hashes) is rejected on the same flow (profile, admin override, public reset) with a human-readable error and **no** database mutation.
 - [ ] On a rejected public reset, the one-time `password_reset_tokens` row is preserved — the same URL/token can immediately be reused with a different (non-recycled) password.
 - [ ] Setting `RBAC_PASSWORD_HISTORY_SIZE=0` completely disables history checks and stops writing to `password_histories` (existing rows remain but are ignored).
+
+---
+
+## 23. RBAC model extensions wave (Improvements 2.1, 2.2, 2.3, 2.5, 2.7, 2.9, 2.10)
+
+This section is **incremental** on top of sections 1-22. Every feature is **additive**: it must not change the effective permissions of the five seeded system roles, and must not weaken `TenantAuthorizer` or multi-tenancy. (Improvements 2.4 ABAC, 2.6 approval workflows and 2.8 instance-level ReBAC are intentionally **out of scope** for this wave.) After implementing, `php artisan test --compact` must report **>=131 passing tests**.
+
+### 23.1 Role inheritance (Improvement 2.3)
+
+Migration `add_parent_id_to_roles_table` (reversible):
+
+```php
+$table->foreignId('parent_id')->nullable()->after('tenant_id')->constrained('roles')->nullOnDelete();
+```
+
+- `Role`: add `parent_id` to `$fillable`; add relations `parent(): BelongsTo(self, 'parent_id')`, `children(): HasMany(self, 'parent_id')`; add `selfAndAncestors(int $maxDepth = 20): Eloquent\Collection` that walks `parent_id` guarding against cycles (track seen ids) and the depth limit, querying parents `withoutGlobalScopes()`.
+- `RoleDefinition`: add `?string $parentSlug = null` constructor property.
+- `RoleRegistry`: set `parentSlug` so the chain is **viewer ← sales ← manager ← tenant-admin**; `auditor` stays parentless. Keep the explicit `permissions` lists unchanged — inheritance is additive so the resulting union is identical, guaranteeing zero regression.
+- `BootstrapTenant::handle`: collect created roles by slug, then run a **second pass** that sets `parent_id` from each definition's `parentSlug` (parents may be created after children).
+- `ResolveUserPermissions::resolve`: replace the direct role→permissions load with: gather active role ids, expand to `roleClosureIds()` (iterative parent walk, depth-limited, cycle-safe), then `Permission::whereHas('roles', fn ($q) => $q->whereIn('roles.id', $closure))->pluck('slug')`. Empty role set must still return `[]`.
+- Action `App\Actions\Authorization\SetRoleParent::handle(User $actor, Role $role, ?int $parentId)`:
+  - super-admin-only for `is_system` roles;
+  - `null` clears the parent;
+  - reject self-parenting, parent from another tenant, and cycles (walk the proposed parent's `selfAndAncestors()`, reject if it contains `$role`);
+  - on apply, `forceFill(['parent_id' => ...])->save()` inside a transaction and invalidate the permission cache for the role **and all of its descendants** (`ForgetUserPermissionsCache::forRole` for each).
+- Controller: `RoleController::syncParent` (route `PUT /t/{tenant}/admin/roles/{role}/parent`, name `admin.roles.parent.sync`), validates `parent_id` nullable `exists:roles,id`, catches `DomainException` → `back()->with('error', ...)`. `edit()` passes `$parentCandidates` (tenant roles except self, ordered by level desc).
+- View: an "Inheritance" card on `admin/roles/edit.blade.php` with a `parent_id` `<select>` (— none — option + candidates), selected on `$role->parent_id`.
+- Pest: `tests/Feature/RoleInheritanceTest.php` — seeded chain present; child gets parent perms; grandparent perms included; self-parent rejected; cycle rejected; cross-tenant parent rejected; null clears; UI route sets parent.
+
+### 23.2 Wildcard permissions (Improvement 2.1)
+
+Migration `add_is_wildcard_to_permissions_table`: `$table->boolean('is_wildcard')->default(false)->after('slug');`
+
+- `Permission` model: add `is_wildcard` to `$fillable`, default in `$attributes`, cast to `boolean`.
+- `App\Enums\Permission` static helpers: `modules(): list<string>` (distinct module slugs), `wildcardSlugs(): list<string>` (`"{module}.*"` for each), `isWildcard(string $slug): bool` (`str_ends_with($slug, '.*')`), `expandWildcards(iterable $slugs): list<string>` (replace each `module.*` with the concrete slugs of that module, drop unknown wildcards, dedupe).
+- `PermissionSeeder`: after the concrete rows, upsert one `"{module}.*"` row per module with `is_wildcard => true`, name `"{Module} (all)"`.
+- `ResolveUserPermissions::resolve`: expand wildcards on both sides — `$granted = Permission::expandWildcards($rolePerms->merge($grants)); $denied = Permission::expandWildcards($denies);` then build the lookup map from `$granted` minus `$denied`. This keeps the cached map flat (no authorizer change) and preserves deny-override **inside** a granted wildcard.
+- `SyncRolePermissions`: valid slugs = concrete enum slugs ∪ `Permission::wildcardSlugs()`. For a non-super-admin actor, expand the requested slugs to concrete via `expandWildcards` and verify the actor holds **all** of them.
+- View: `admin/roles/edit.blade.php` adds a per-module "`module.*` (grant all)" checkbox (value `{{ $module }}.*`), checked when present in `$rolePermissionSlugs`.
+- Pest: `tests/Feature/WildcardPermissionTest.php` — wildcard rows seeded; wildcard expands to all concrete; deny overrides one slug inside the wildcard; sync accepts a wildcard; unknown wildcard rejected; non-super-admin blocked from granting a wildcard they do not fully hold.
+
+### 23.3 Permission groups / bundles (Improvement 2.2)
+
+Migrations: `create_permission_groups_table` (`tenant_id` nullable FK cascade — null = global; `name`, `slug`, `description`; unique `[tenant_id, slug]`) and `create_permission_group_permission_table` (FKs to `permission_groups` + `permissions`, unique pair `perm_group_perm_unique`).
+
+- Model `App\Models\PermissionGroup` (`$fillable` = tenant_id/name/slug/description; `tenant(): BelongsTo`; `permissions(): belongsToMany(Permission::class, 'permission_group_permission')` — **must** name the pivot explicitly).
+- `PermissionGroupSeeder` (registered in `DatabaseSeeder` **and** the Pest `seedRbacCatalog()` helper, after `PermissionSeeder`): four global bundles — `crm-read-only`, `crm-full`, `user-administration`, `audit-access` — synced from concrete slug lists.
+- Action `App\Actions\Authorization\ApplyPermissionGroupToRole::handle(User $actor, Role $role, PermissionGroup $group)`: reject a tenant-scoped group from another tenant; compute `union(current role slugs, group slugs)` and delegate to `SyncRolePermissions::handle` (inherits all guards).
+- Controller: `RoleController::applyGroup` (route `POST /t/{tenant}/admin/roles/{role}/apply-group`, name `admin.roles.groups.apply`), authorizes `syncPermissions`, validates `permission_group_id`, resolves group scoped to global-or-tenant. `edit()` passes `$permissionGroups` (global + tenant, `withCount('permissions')`).
+- View: "Apply a permission bundle" form (select + button) on the role edit page.
+- Pest: `tests/Feature/PermissionGroupTest.php` — bundles seeded; additive merge keeps existing perms; UI apply; non-super-admin blocked when bundle exceeds their holdings.
+
+### 23.4 Time-bound elevated access (Improvement 2.7)
+
+No migration (`role_user.expires_at` already exists and the resolver already filters expired assignments).
+
+- Action `App\Actions\Authorization\GrantTemporaryRole::handle(User $actor, User $member, int $roleId, int $hours)`: reject `< 1` hour; resolve the role scoped to the member's tenant (or a global `is_system` role); enforce actor-level > role-level unless super-admin; run `RoleAssignmentConstraint::assertValid` against `existing active slugs ∪ new slug`; `syncWithoutDetaching` the single role with `expires_at = CarbonImmutable::now()->addHours($hours)`; invalidate cache; audit `RolesAssigned` with `temporary => true` + `expires_at`. Existing assignments are untouched.
+- Controller: `UserController::grantTemporaryRole` (route `POST /t/{tenant}/admin/users/{user}/roles/temporary`, name `admin.users.roles.temporary`), authorizes `update`, validates `role_id` + `hours` (1..8760).
+- View `admin/users/show.blade.php`: show an "expires …" badge next to roles whose pivot `expires_at` is set, and add a "Grant temporary (JIT) role" form (role select + hours input). Clarify that the main role checkbox form replaces the full set with permanent assignments.
+- Pest: `tests/Feature/TemporaryRoleTest.php` — grant adds without removing + sets future expiry; perms drop after `$this->travel(N)->hours()` + cache forget; `< 1` hour rejected; cannot grant at/above actor level; UI grant works.
+
+### 23.5 Permission preview / diff (Improvement 2.5)
+
+No migration.
+
+- `RoleController::syncPermissions`: capture `$before = $role->permissions()->pluck('slug')`, call the action, capture `$after`, then `back()->with('status', ...)->with('perm_diff', ['added' => array_diff($after,$before), 'removed' => array_diff($before,$after)])`.
+- `RoleController::edit`: also pass `$affectedUsers` (the role's users, limited to 50) and `$affectedUserCount`.
+- View `admin/roles/edit.blade.php`: (a) a "Last change" panel rendering `session('perm_diff')` added (green) / removed (red); (b) an "Impact" card with the affected-user count + list; (c) a small inline `<script>` that compares each permission checkbox to its initial state and live-renders "Unsaved: +N / −M".
+- Pest: `tests/Feature/PermissionDiffTest.php` — sync flashes the correct added/removed diff; edit page shows the impact panel with an affected user's email.
+
+### 23.6 Clone system role (Improvement 2.10)
+
+No migration.
+
+- Action `App\Actions\Authorization\CloneRole::handle(User $actor, Tenant $tenant, Role $source, array $overrides = [])`: reject cloning a role from another tenant; default `name = "{source} (copy)"`, `slug = Str::slug($name)`, `level = max(0, source.level - 1)`; enforce actor-level > clone-level unless super-admin; reject duplicate slug within the tenant; in a transaction create the `is_system=false` role copying `description`, `parent_id` and all permissions.
+- Controller: `RoleController::clone` (route `POST /t/{tenant}/admin/roles/{role}/clone`, name `admin.roles.clone`), authorizes `create` on `Role`, validates optional `name`/`slug`/`level`, redirects to the new role editor. `create()` passes `$cloneable` (tenant roles).
+- Views: a "Clone" button per row on `admin/roles/index.blade.php` (gated by `@can('create', Role::class)`) and a "Clone an existing role" block on `admin/roles/create.blade.php` (select + JS that swaps a `__placeholder__` route segment for the chosen role id).
+- Pest: `tests/Feature/CloneRoleTest.php` — clone copies perms at level-1; copies parent; non-super-admin cannot clone at/above own level; UI clone produces `…-copy` slug; duplicate slug rejected.
+
+### 23.7 Permission usage tracking (Improvement 2.9)
+
+No migration (reads `permission_role`, `permission_user`, `audit_logs`).
+
+- `config/rbac.php`: add `'usage' => ['window_days' => (int) env('RBAC_USAGE_WINDOW_DAYS', 30), 'cache_ttl' => (int) env('RBAC_USAGE_CACHE_TTL', 86400)]`.
+- Action `App\Actions\Authorization\PermissionUsageReport` (`const CACHE_KEY = 'rbac:usage:report'`): `handle(bool $fresh = false): array` returns `['slug' => ['granted_roles' => int, 'granted_users' => int, 'denied' => int]]`, cached for `usage.cache_ttl` (forget first when `$fresh`). Compute: role counts from `permission_role` grouped by `permission_id`; direct-grant counts from `permission_user` where `type='grant'`; denied counts by loading `audit_logs` with `action = permission_denied` and `created_at >= now()->subDays(window)`, grouped by `metadata['permission']`.
+- Command `App\Console\Commands\RbacUsageReport` (`signature = 'rbac:usage {--unused}'`): refresh the report, print a table (Permission / Roles / Direct users / Denied / Flag), mark rows with zero grants as `UNUSED`, print totals. `--unused` filters to never-granted permissions.
+- `SuperAdmin\PermissionController::index` injects `PermissionUsageReport`, passes `$usage` + `$usageWindow`; the catalog view becomes a table with Roles / Direct users / Denied columns, amber highlight + "unused"/"wildcard" tags.
+- Pest: `tests/Feature/PermissionUsageTest.php` — granted-role count reported; denial within window counted; denial older than window ignored; `rbac:usage` exits 0; super-admin catalog renders the stats.
+
+### 23.8 Acceptance checklist (delta on top of sections 19 and 22)
+
+- [ ] `php artisan test --compact` reports **>=131** passing tests with all section-23 files included; `vendor/bin/pint --dirty` is clean.
+- [ ] The five seeded system roles resolve to the **same** effective permission sets as before this wave (inheritance is additive).
+- [ ] A custom role with only `parent_id` set (no own permissions) resolves to its parent's full set; the chain is walked to the grandparent; cycles and self-parenting are rejected.
+- [ ] A role granted `deals.*` resolves to all six `deals.*` permissions; a direct `deny` on `deals.delete` still removes only that one.
+- [ ] Applying the `crm-read-only` bundle to a role adds its view permissions without removing anything already present.
+- [ ] A JIT temporary role disappears from the resolved set once `expires_at` passes (after cache invalidation), without affecting the user's permanent roles.
+- [ ] Saving role permissions flashes an added/removed diff and the edit page shows the count of affected users.
+- [ ] Cloning `manager` yields an editable `is_system=false` role one level lower with identical permissions and the same parent.
+- [ ] `php artisan rbac:usage` prints per-permission stats; the super-admin permissions catalog shows the same numbers and flags never-granted permissions.
