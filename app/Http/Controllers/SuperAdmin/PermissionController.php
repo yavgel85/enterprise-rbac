@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\SuperAdmin;
 
+use App\Actions\Authorization\PermissionUsageReport;
 use App\Http\Controllers\Controller;
 use App\Models\Module;
 use App\Models\Permission;
@@ -11,14 +12,17 @@ use Illuminate\View\View;
 
 class PermissionController extends Controller
 {
-    public function index(): View
+    public function index(PermissionUsageReport $report): View
     {
         $modules = Module::query()
             ->with(['permissions' => fn ($q) => $q->orderBy('slug')])
             ->orderBy('sort_order')
             ->get();
 
-        return view('super-admin.permissions.index', compact('modules'));
+        $usage = $report->handle();
+        $usageWindow = (int) config('rbac.usage.window_days', 30);
+
+        return view('super-admin.permissions.index', compact('modules', 'usage', 'usageWindow'));
     }
 
     public function show(Permission $permission): View

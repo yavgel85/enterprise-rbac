@@ -68,4 +68,17 @@ return [
     'password_history' => [
         'size' => (int) env('RBAC_PASSWORD_HISTORY_SIZE', 5),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Permission usage tracking
+    |--------------------------------------------------------------------------
+    | The rbac:usage command (and the super-admin permissions catalog) report
+    | how many roles/users hold each permission and how many times it was
+    | denied within the window below. Results are cached for cache_ttl seconds.
+    */
+    'usage' => [
+        'window_days' => (int) env('RBAC_USAGE_WINDOW_DAYS', 30),
+        'cache_ttl' => (int) env('RBAC_USAGE_CACHE_TTL', 86400),
+    ],
 ];
