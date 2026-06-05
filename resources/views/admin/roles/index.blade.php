@@ -32,6 +32,12 @@
                         <td class="px-4 py-3 text-gray-700">{{ $role->permissions_count }}</td>
                         <td class="px-4 py-3 text-right space-x-3">
                             <a href="{{ route('admin.roles.edit', [$tenant, $role]) }}" class="text-sm text-indigo-600 hover:text-indigo-500">Edit</a>
+                            @can('create', App\Models\Role::class)
+                                <form method="POST" action="{{ route('admin.roles.clone', [$tenant, $role]) }}" class="inline" onsubmit="return confirm('Clone “{{ $role->name }}” into a new editable role?')">
+                                    @csrf
+                                    <button type="submit" class="text-sm text-emerald-600 hover:text-emerald-700">Clone</button>
+                                </form>
+                            @endcan
                             @can('delete', $role)
                                 <form method="POST" action="{{ route('admin.roles.destroy', [$tenant, $role]) }}" class="inline" onsubmit="return confirm('Delete this role?')">
                                     @csrf
