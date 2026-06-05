@@ -23,6 +23,8 @@ final readonly class BootstrapTenant
         DB::transaction(function () use ($tenant, $firstAdmin) {
             $permissions = Permission::query()->pluck('id', 'slug');
 
+            $rolesBySlug = [];
+
             foreach (RoleRegistry::all() as $definition) {
                 $role = Role::create([
                     'tenant_id' => $tenant->id,
@@ -33,6 +35,8 @@ final readonly class BootstrapTenant
                     'is_system' => false,
                 ]);
 
+                $rolesBySlug[$definition->slug] = $role;
+
                 $ids = $permissions
                     ->only($definition->permissionSlugs())
                     ->values()
@@ -40,6 +44,18 @@ final readonly class BootstrapTenant
 
                 if ($ids !== []) {
                     $role->permissions()->sync($ids);
+                }
+            }
+
+            // Second pass: wire parent_id now that every role row exists.
+            foreach (RoleRegistry::all() as $definition) {
+                if ($definition->parentSlug === null) {
+                    continue;
+                }
+
+                $parent = $rolesBySlug[$definition->parentSlug] ?? null;
+                if ($parent !== null) {
+                    $rolesBySlug[$definition->slug]->forceFill(['parent_id' => $parent->id])->save();
                 }
             }
 

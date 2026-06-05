@@ -96,6 +96,7 @@ Route::middleware('auth')->group(function () {
                 Route::post('users/invite', [UserController::class, 'invite'])->name('users.invite');
                 Route::get('users/{user}', [UserController::class, 'show'])->name('users.show');
                 Route::put('users/{user}/roles', [UserController::class, 'syncRoles'])->name('users.roles.sync');
+                Route::post('users/{user}/roles/temporary', [UserController::class, 'grantTemporaryRole'])->name('users.roles.temporary');
                 Route::put('users/{user}/unlock', [UserController::class, 'unlock'])->name('users.unlock');
                 Route::put('users/{user}/password', [UserController::class, 'updatePassword'])->name('users.password.update');
 
@@ -104,7 +105,10 @@ Route::middleware('auth')->group(function () {
                 Route::post('roles', [RoleController::class, 'store'])->name('roles.store');
                 Route::get('roles/{role}/edit', [RoleController::class, 'edit'])->name('roles.edit');
                 Route::put('roles/{role}', [RoleController::class, 'update'])->name('roles.update');
+                Route::put('roles/{role}/parent', [RoleController::class, 'syncParent'])->name('roles.parent.sync');
                 Route::put('roles/{role}/permissions', [RoleController::class, 'syncPermissions'])->name('roles.permissions.sync');
+                Route::post('roles/{role}/apply-group', [RoleController::class, 'applyGroup'])->name('roles.groups.apply');
+                Route::post('roles/{role}/clone', [RoleController::class, 'clone'])->name('roles.clone');
                 Route::delete('roles/{role}', [RoleController::class, 'destroy'])->name('roles.destroy');
 
                 Route::get('permissions', [AdminPermissionController::class, 'index'])->name('permissions.index');

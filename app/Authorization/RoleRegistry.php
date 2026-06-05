@@ -21,6 +21,7 @@ final class RoleRegistry
                 level: 90,
                 permissions: Permission::cases(),
                 description: 'Full access within the tenant',
+                parentSlug: 'manager',
             ),
             'manager' => new RoleDefinition(
                 slug: 'manager',
@@ -49,6 +50,7 @@ final class RoleRegistry
                     Permission::AuditView,
                 ],
                 description: 'CRM full access + audit visibility',
+                parentSlug: 'sales',
             ),
             'sales' => new RoleDefinition(
                 slug: 'sales',
@@ -73,6 +75,7 @@ final class RoleRegistry
                     Permission::ActivitiesUpdate,
                 ],
                 description: 'CRM operations without approve or delete',
+                parentSlug: 'viewer',
             ),
             'auditor' => new RoleDefinition(
                 slug: 'auditor',

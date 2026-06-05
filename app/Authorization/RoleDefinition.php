@@ -17,6 +17,7 @@ final readonly class RoleDefinition
         public int $level,
         public array $permissions,
         public string $description = '',
+        public ?string $parentSlug = null,
     ) {}
 
     public function has(Permission $permission): bool
