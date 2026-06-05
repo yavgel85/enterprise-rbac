@@ -8,6 +8,7 @@ use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\FeatureSeeder;
 use Database\Seeders\ModuleSeeder;
+use Database\Seeders\PermissionGroupSeeder;
 use Database\Seeders\PermissionSeeder;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Tests\TestCase;
@@ -29,6 +30,7 @@ function seedRbacCatalog(): void
 {
     (new ModuleSeeder)->run();
     (new PermissionSeeder)->run();
+    (new PermissionGroupSeeder)->run();
     (new FeatureSeeder)->run();
 }
 
