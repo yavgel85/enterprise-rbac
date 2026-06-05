@@ -92,4 +92,63 @@ enum Permission: string
 
         return $grouped;
     }
+
+    /**
+     * Distinct module slugs that own at least one permission.
+     *
+     * @return list<string>
+     */
+    public static function modules(): array
+    {
+        return array_values(array_unique(array_map(
+            fn (self $case) => $case->module(),
+            self::cases()
+        )));
+    }
+
+    /**
+     * The wildcard slug ("module.*") for every module.
+     *
+     * @return list<string>
+     */
+    public static function wildcardSlugs(): array
+    {
+        return array_map(fn (string $module) => "{$module}.*", self::modules());
+    }
+
+    public static function isWildcard(string $slug): bool
+    {
+        return str_ends_with($slug, '.*');
+    }
+
+    /**
+     * Replace any "module.*" wildcard slug with the concrete permission slugs
+     * of that module. Unknown wildcards (modules without permissions) are dropped.
+     *
+     * @param  iterable<string>  $slugs
+     * @return list<string>
+     */
+    public static function expandWildcards(iterable $slugs): array
+    {
+        $modules = [];
+        $concrete = [];
+
+        foreach ($slugs as $slug) {
+            if (self::isWildcard($slug)) {
+                $modules[substr($slug, 0, -2)] = true;
+            } else {
+                $concrete[] = $slug;
+            }
+        }
+
+        if ($modules !== []) {
+            foreach (self::cases() as $case) {
+                if (isset($modules[$case->module()])) {
+                    $concrete[] = $case->value;
+                }
+            }
+        }
+
+        return array_values(array_unique($concrete));
+    }
 }

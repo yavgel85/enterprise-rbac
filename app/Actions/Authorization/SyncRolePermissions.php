@@ -26,7 +26,10 @@ final readonly class SyncRolePermissions
             throw new DomainException('Only super-admin can edit permissions on system roles.');
         }
 
-        $validSlugs = array_map(fn (PermissionEnum $p) => $p->value, PermissionEnum::cases());
+        $validSlugs = array_merge(
+            array_map(fn (PermissionEnum $p) => $p->value, PermissionEnum::cases()),
+            PermissionEnum::wildcardSlugs(),
+        );
         $unknown = array_diff($permissionSlugs, $validSlugs);
         if ($unknown !== []) {
             throw new DomainException('Unknown permission slugs: '.implode(', ', $unknown));
@@ -34,7 +37,10 @@ final readonly class SyncRolePermissions
 
         if (! $actor->is_super_admin) {
             $actorPermissions = array_keys($actor->allPermissions());
-            $missing = array_diff($permissionSlugs, $actorPermissions);
+            // A wildcard is only grantable if the actor holds every concrete
+            // permission it would expand to.
+            $requestedConcrete = PermissionEnum::expandWildcards($permissionSlugs);
+            $missing = array_diff($requestedConcrete, $actorPermissions);
             if ($missing !== []) {
                 throw new DomainException(
                     'You cannot grant permissions you do not hold: '.implode(', ', $missing)

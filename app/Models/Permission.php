@@ -20,7 +20,19 @@ class Permission extends Model
         'name',
         'slug',
         'description',
+        'is_wildcard',
     ];
+
+    protected $attributes = [
+        'is_wildcard' => false,
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'is_wildcard' => 'boolean',
+        ];
+    }
 
     public function module(): BelongsTo
     {
