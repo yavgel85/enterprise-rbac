@@ -47,17 +47,43 @@
                     @method('PUT')
                     <div class="space-y-2 text-sm">
                         @foreach ($allRoles as $role)
+                            @php($pivot = optional($user->roles->firstWhere('id', $role->id))->pivot)
                             <label class="flex items-center gap-3">
                                 <input type="checkbox" name="role_ids[]" value="{{ $role->id }}"
                                     @checked($user->roles->contains('id', $role->id))
                                     class="h-4 w-4 rounded border-gray-300 text-indigo-600">
                                 <span class="font-medium">{{ $role->name }}</span>
                                 <span class="text-gray-500">({{ $role->slug }}, level {{ $role->level }})</span>
+                                @if ($pivot?->expires_at)
+                                    <span class="ml-auto text-xs rounded-full bg-amber-100 text-amber-800 px-2 py-0.5">
+                                        expires {{ \Illuminate\Support\Carbon::parse($pivot->expires_at)->diffForHumans() }}
+                                    </span>
+                                @endif
                             </label>
                         @endforeach
                     </div>
-                    <button type="submit" class="mt-4 rounded-md bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-indigo-500">Save roles</button>
+                    <p class="mt-2 text-xs text-gray-500">Saving here replaces the full role set with permanent assignments.</p>
+                    <button type="submit" class="mt-3 rounded-md bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-indigo-500">Save roles</button>
                 </form>
+
+                <div class="mt-6 pt-6 border-t border-gray-200">
+                    <h4 class="text-sm font-semibold text-gray-900 mb-1">Grant temporary (JIT) role</h4>
+                    <p class="text-xs text-gray-500 mb-3">Adds one role that auto-expires, without touching existing assignments.</p>
+                    <form method="POST" action="{{ route('admin.users.roles.temporary', [$tenant, $user]) }}" class="flex flex-col sm:flex-row gap-2">
+                        @csrf
+                        <select name="role_id" required class="block w-full rounded-md border-gray-300 shadow-sm px-3 py-2 border text-sm">
+                            @foreach ($allRoles as $role)
+                                <option value="{{ $role->id }}">{{ $role->name }} (level {{ $role->level }})</option>
+                            @endforeach
+                        </select>
+                        <div class="flex items-center gap-1 shrink-0">
+                            <input type="number" name="hours" min="1" max="8760" value="4" required
+                                class="w-20 rounded-md border-gray-300 shadow-sm px-3 py-2 border text-sm">
+                            <span class="text-sm text-gray-500">hours</span>
+                        </div>
+                        <button type="submit" class="shrink-0 rounded-md bg-amber-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-amber-500">Grant</button>
+                    </form>
+                </div>
             </div>
 
             <div class="bg-white rounded-lg border border-gray-200 shadow-sm p-6">

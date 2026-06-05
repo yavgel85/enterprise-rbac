@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Admin;
 
 use App\Actions\Authorization\AssignRolesToUser;
+use App\Actions\Authorization\GrantTemporaryRole;
 use App\Actions\Authorization\SetUserPassword;
 use App\Actions\Authorization\UnlockUserAccount;
 use App\Actions\Invitation\InviteUser;
@@ -70,6 +71,24 @@ class UserController extends Controller
         }
 
         return back()->with('status', 'Roles updated.');
+    }
+
+    public function grantTemporaryRole(Request $request, GrantTemporaryRole $grant, Tenant $tenant, User $user): RedirectResponse
+    {
+        $this->authorize('update', $user);
+
+        $payload = $request->validate([
+            'role_id' => ['required', 'integer', 'exists:roles,id'],
+            'hours' => ['required', 'integer', 'min:1', 'max:8760'],
+        ]);
+
+        try {
+            $grant->handle($request->user(), $user, $payload['role_id'], $payload['hours']);
+        } catch (DomainException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        return back()->with('status', "Temporary role granted for {$payload['hours']}h.");
     }
 
     public function unlock(UnlockUserAccount $unlock, Tenant $tenant, User $user): RedirectResponse
