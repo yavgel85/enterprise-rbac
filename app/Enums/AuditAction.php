@@ -46,4 +46,7 @@ enum AuditAction: string
 
     case PermissionConditionCreated = 'permission_condition_created';
     case PermissionConditionDeleted = 'permission_condition_deleted';
+
+    case ResourcePermissionGranted = 'resource_permission_granted';
+    case ResourcePermissionRevoked = 'resource_permission_revoked';
 }

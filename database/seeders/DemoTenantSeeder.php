@@ -19,6 +19,7 @@ use App\Models\Department;
 use App\Models\Feature;
 use App\Models\Permission;
 use App\Models\PermissionCondition;
+use App\Models\ResourcePermission;
 use App\Models\Role;
 use App\Models\Task;
 use App\Models\Tenant;
@@ -84,6 +85,10 @@ class DemoTenantSeeder extends Seeder
             ['attr' => 'deal.status', 'op' => '!=', 'value' => 'closed'],
             'Closed deals cannot be deleted',
         );
+
+        // 2.8 ReBAC: the viewer gets edit access to a single deal instance.
+        $oneDeal = Deal::query()->where('tenant_id', $tenant->id)->firstOrFail();
+        $this->attachResourcePermission($tenant, $viewer, 'deals.update', $oneDeal, $admin);
     }
 
     private function seedGlobex(): void
@@ -178,6 +183,20 @@ class DemoTenantSeeder extends Seeder
             'role_id' => $roleId,
             'conditions' => $conditions,
             'description' => $description,
+        ]);
+    }
+
+    private function attachResourcePermission(Tenant $tenant, User $user, string $slug, Deal $resource, User $assignedBy): void
+    {
+        $permission = Permission::query()->where('slug', $slug)->firstOrFail();
+
+        ResourcePermission::create([
+            'tenant_id' => $tenant->id,
+            'user_id' => $user->id,
+            'permission_id' => $permission->id,
+            'resource_type' => $resource->getMorphClass(),
+            'resource_id' => $resource->getKey(),
+            'assigned_by' => $assignedBy->id,
         ]);
     }
 

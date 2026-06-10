@@ -135,6 +135,8 @@ Route::middleware('auth')->group(function () {
                 Route::resource('contacts', ContactController::class);
                 Route::resource('deals', DealController::class);
                 Route::post('deals/{deal}/approve', [DealController::class, 'approve'])->name('deals.approve');
+                Route::post('deals/{deal}/instance-permissions', [DealController::class, 'grantInstancePermission'])->name('deals.instance-permissions.grant');
+                Route::delete('deals/{deal}/instance-permissions/{resourcePermission}', [DealController::class, 'revokeInstancePermission'])->name('deals.instance-permissions.revoke');
                 Route::resource('tasks', TaskController::class);
                 Route::post('tasks/{task}/complete', [TaskController::class, 'complete'])->name('tasks.complete');
 

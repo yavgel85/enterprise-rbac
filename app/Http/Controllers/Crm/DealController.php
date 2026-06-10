@@ -5,18 +5,25 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Crm;
 
 use App\Actions\Audit\LogAuditEvent;
+use App\Actions\Authorization\GrantResourcePermission;
+use App\Actions\Authorization\RevokeResourcePermission;
 use App\Enums\AuditAction;
 use App\Enums\DealStage;
 use App\Enums\DealStatus;
+use App\Enums\Permission as PermissionEnum;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\DealRequest;
 use App\Models\Company;
 use App\Models\Contact;
 use App\Models\Deal;
 use App\Models\Department;
+use App\Models\Permission;
+use App\Models\ResourcePermission;
 use App\Models\Tenant;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\View\View;
 
 class DealController extends Controller
@@ -58,7 +65,22 @@ class DealController extends Controller
 
         $deal->load(['company:id,name', 'contact:id,first_name,last_name', 'owner:id,name', 'department:id,name']);
 
-        return view('crm.deals.show', compact('deal', 'tenant'));
+        $instanceGrants = ResourcePermission::query()
+            ->with(['user:id,name', 'permission:id,slug'])
+            ->where('resource_type', $deal->getMorphClass())
+            ->where('resource_id', $deal->getKey())
+            ->get();
+
+        return view('crm.deals.show', [
+            'deal' => $deal,
+            'tenant' => $tenant,
+            'instanceGrants' => $instanceGrants,
+            'assignableUsers' => User::query()->where('tenant_id', $tenant->id)->orderBy('name')->get(['id', 'name']),
+            'instancePermissions' => Permission::query()
+                ->whereIn('slug', ['deals.view', 'deals.update', 'deals.delete', 'deals.approve'])
+                ->orderBy('slug')
+                ->get(['id', 'slug']),
+        ]);
     }
 
     public function edit(Tenant $tenant, Deal $deal): View
@@ -102,6 +124,43 @@ class DealController extends Controller
 
         return redirect()->route('crm.deals.show', [$tenant, $deal])
             ->with('status', 'Deal approved and closed.');
+    }
+
+    public function grantInstancePermission(Request $request, GrantResourcePermission $action, Tenant $tenant, Deal $deal): RedirectResponse
+    {
+        abort_unless($request->user()->hasPermission(PermissionEnum::PermissionsAssign), 403);
+
+        $data = $request->validate([
+            'user_id' => ['required', 'integer', 'exists:users,id'],
+            'permission_id' => ['required', 'integer', 'exists:permissions,id'],
+            'expires_at' => ['nullable', 'date', 'after:now'],
+        ]);
+
+        $user = User::where('tenant_id', $tenant->id)->findOrFail($data['user_id']);
+        $permission = Permission::findOrFail($data['permission_id']);
+
+        $action->handle(
+            $request->user(),
+            $user,
+            $permission,
+            $deal,
+            isset($data['expires_at']) ? Carbon::parse($data['expires_at']) : null,
+        );
+
+        return back()->with('status', 'Instance permission granted.');
+    }
+
+    public function revokeInstancePermission(Request $request, RevokeResourcePermission $action, Tenant $tenant, Deal $deal, ResourcePermission $resourcePermission): RedirectResponse
+    {
+        abort_unless($request->user()->hasPermission(PermissionEnum::PermissionsAssign), 403);
+        abort_unless(
+            $resourcePermission->resource_type === $deal->getMorphClass() && $resourcePermission->resource_id === $deal->getKey(),
+            404,
+        );
+
+        $action->handle($resourcePermission);
+
+        return back()->with('status', 'Instance permission revoked.');
     }
 
     private function formData(Tenant $tenant, ?Deal $deal = null): array

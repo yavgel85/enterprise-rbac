@@ -16,6 +16,7 @@ final readonly class TenantAuthorizer
     public function __construct(
         private ResolveUserPermissions $resolve,
         private AbacGate $abac,
+        private InstancePermissionGate $instanceGate,
     ) {}
 
     /**
@@ -24,7 +25,8 @@ final readonly class TenantAuthorizer
      *  2. User must be active.
      *  3. Tenant must be present and active.
      *  4. Resource (if provided) must belong to the same tenant.
-     *  5. User must have the required permission.
+     *  5. User must have the required permission (role/inherited/direct/wildcard),
+     *     or an instance-level grant for this specific resource (ReBAC, 2.8).
      *  6. ABAC conditions attached to the permission must hold (2.4).
      */
     public function allows(User $user, Permission $permission, ?Tenant $tenant = null, ?Model $resource = null): Response
@@ -50,9 +52,16 @@ final readonly class TenantAuthorizer
         $permissions = $this->resolve->handle($user);
 
         if (! isset($permissions[$permission->value])) {
+            // ReBAC fallback: an explicit grant on this resource instance bypasses
+            // the missing static permission (but not tenant/active checks above).
+            if ($resource !== null && $this->instanceGate->allows($user, $permission, $resource)) {
+                return Response::allow();
+            }
+
             return Response::deny("Missing permission: {$permission->value}");
         }
 
+        // ABAC: a granted permission may still be narrowed by declarative conditions.
         if (! $this->abac->passes($user, $permission, $resource, $tenant)) {
             return Response::deny("Access conditions not met for: {$permission->value}");
         }
