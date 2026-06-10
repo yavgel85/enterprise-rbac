@@ -188,7 +188,7 @@
 
 > **Реализовано.** Миграция `add_parent_id_to_roles_table` (self-FK, `nullOnDelete`). `Role::selfAndAncestors()` и `ResolveUserPermissions::roleClosureIds()` обходят цепочку родителей с защитой от циклов и depth-limit 20. `RoleDefinition` получил `parentSlug`; `RoleRegistry` задаёт цепочку **viewer ← sales ← manager ← tenant-admin** (auditor — без родителя), а `BootstrapTenant` во втором проходе проставляет `parent_id`. Явные списки прав системных ролей оставлены без изменений (наследование аддитивно, union тот же → нулевой риск регрессии). Cycle-safe `SetRoleParent` валидирует self/cross-tenant/cycle и сбрасывает кэш для роли и всех её потомков. UI: карточка «Inheritance» с селектором родителя в редакторе роли. Pest: `tests/Feature/RoleInheritanceTest.php`.
 
-### 2.4 Resource-based / ABAC layer (P1, L)
+### 2.4 Resource-based / ABAC layer ✅ (P1, L) — _Сделано_
 
 **Зачем.** Сейчас контекстные правила (бизнес-часы, owner, department) живут в Policy-коде. Это негибко. Хочется задавать правила декларативно для каждой роли/permission.
 
@@ -208,7 +208,7 @@
 
 Класс `ConditionEvaluator::satisfies($context, $conditions): bool`. Используется в `TenantAuthorizer` после проверки прав.
 
-> ⏳ _Отложено в этой итерации (L)._ Решено реализовывать как **аддитивный** слой (hardcoded-правила в Policy остаются, ABAC — дополнительный гейт; пустые conditions не меняют поведение), но из-за объёма вынесено в отдельный спринт.
+> **Реализовано.** Таблица `permission_conditions(tenant_id?, permission_id, role_id?, conditions json, description)`. Движок `App\Authorization\ConditionEvaluator` поддерживает группы `all`/`any`/`not`, листья `{attr, op, value}`, операторы `= != > < >= <= in not_in contains` и ссылки на контекст через `$` (например `"$user.id"`). Гейт `App\Authorization\AbacGate` подключён в `TenantAuthorizer::allows` **после** успешной проверки права: собирает применимые условия для (permission, tenant, активные роли пользователя) и требует, чтобы **все** они выполнялись (выбран вариант AND). Слой строго **аддитивный** — право без условий ведёт себя как раньше; есть кэш `rbac:abac:conditioned_slugs` для быстрого short-circuit. Контекст содержит `user.*`, `resource.*` и snake-имя модели (`deal.*`). UI: tenant-admin (право `permissions.assign`) управляет условиями на `admin/permission-conditions` (JSON-редактор с валидацией структуры, список, удаление) + DSL-шпаргалка. Демо-условие в сидере: «closed-сделку нельзя удалять». Pest: `tests/Feature/AbacConditionTest.php`.
 
 ### 2.5 Permission preview / diff ✅ (P2, M) — _Сделано_
 
@@ -216,7 +216,7 @@ UI на странице редактирования роли показыва�
 
 > **Реализовано.** На странице редактирования роли: (1) клиентский индикатор «Unsaved: +N / −M», сравнивающий чекбоксы с исходным состоянием в реальном времени; (2) после сохранения сервер отдаёт точный diff `perm_diff` (added/removed) и отрисовывает блок «Last change» с зелёными/красными slug-ами; (3) панель «Impact» со счётчиком и списком затронутых пользователей (поскольку sync немедленно пересчитывает их доступ). Pest: `tests/Feature/PermissionDiffTest.php`.
 
-### 2.6 Approval workflows (P1, L)
+### 2.6 Approval workflows ✅ (P1, L) — _Сделано_
 
 **Зачем.** Бизнес требует, чтобы крупные сделки (>=$100k) одобряли два человека (`manager` + `tenant-admin`).
 
@@ -226,7 +226,7 @@ UI на странице редактирования роли показыва�
 - DealController.approve: если `deal.amount >= threshold` → создаёт `ApprovalRequest` и помещает deal в стадию `approval_pending` вместо немедленного approve.
 - UI: вкладка "Approvals queue" в admin меню.
 
-> ⏳ _Отложено в этой итерации (L)._ Согласованная модель: порог из конфига (дефолт $100k), 2 шага по ролям `manager → tenant-admin`, сделки ниже порога одобряются сразу как сейчас.
+> **Реализовано.** Таблицы `approval_requests(tenant_id, approvable morph, requested_by, status[pending/approved/rejected], current_step, payload)` и `approval_steps(approval_request_id, step, approver_role_id, decided_by, decided_at, decision, note)`. Конфиг `rbac.approvals`: `deal_threshold` (дефолт `100000`) и `deal_steps = ['manager','tenant-admin']`. `DealController::approve`: при `amount >= threshold` создаётся `ApprovalRequest` (action `RequestApproval`) и сделка переводится в новый статус `DealStatus::PendingApproval`; ниже порога — мгновенное закрытие как раньше. Решения по шагам — action `DecideApprovalStep`: шаг может закрыть только пользователь с ролью этого шага, **не являющийся инициатором** (separation of duties; выбран строгий вариант), reject → сделка возвращается в `active`, полное одобрение → `won/closed`. Добавлен permission `approvals.view` (есть у `manager` и `tenant-admin`). UI: очередь `crm/approvals` с прогрессом шагов, кнопками Approve/Reject и историей решённых; в сайдбаре пункт «Approvals» с бейджем числа ожидающих решения текущим пользователем; на странице сделки — плашка «Pending approval». Pest: `tests/Feature/ApprovalWorkflowTest.php`.
 
 ### 2.7 Time-bound elevated access ✅ (P1, M) — _Сделано_
 
@@ -234,11 +234,11 @@ UI на странице редактирования роли показыва�
 
 > **Реализовано.** Действие `GrantTemporaryRole` добавляет **одну** роль через `syncWithoutDetaching` с `expires_at = now()->addHours(N)`, не трогая постоянные назначения; проверяет минимум 1 час, уровень актёра и separation-of-duties для результирующего набора, сбрасывает кэш и пишет аудит `roles_assigned` с флагом `temporary`. Resolver уже отбрасывает протухшие назначения, поэтому права исчезают автоматически. UI: на `admin/users/show` блок «Grant temporary (JIT) role» (роль + часы) и бейдж «expires …» рядом с временными ролями. Pest: `tests/Feature/TemporaryRoleTest.php`.
 
-### 2.8 Custom permission per resource instance (P2, L)
+### 2.8 Custom permission per resource instance ✅ (P2, L) — _Сделано_
 
 ReBAC-стиль: дать пользователю Виктору доступ к **конкретному** deal #123. Таблица `resource_permissions(user_id, permission_id, resource_type, resource_id, expires_at)`. Расширить `TenantAuthorizer::allows` четвёртой стадией — instance permission.
 
-> ⏳ _Отложено в этой итерации (L)._ Задумано как аддитивная 4-я стадия авторизатора (instance-grant только расширяет доступ, не запрещает).
+> **Реализовано.** Таблица `resource_permissions(tenant_id, user_id, permission_id, resource_type, resource_id, expires_at?, assigned_by?)` + модель `ResourcePermission` (с unique-индексом на пользователя/право/ресурс). Гейт `App\Authorization\InstancePermissionGate` подключён в `TenantAuthorizer::allows` как **fallback**: если статическое право отсутствует, но передан resource и есть непротухший instance-grant — доступ разрешается. Слой строго **аддитивный** — он только расширяет доступ и не обходит проверки активности/кросс-тенанта. Actions `GrantResourcePermission` / `RevokeResourcePermission` (с аудитом). UI: на странице сделки блок «Instance permissions (ReBAC)» (для держателей `permissions.assign`) — выдать пользователю право на эту сделку с опциональным сроком, список и revoke. Демо: viewer получает `deals.update` на одну конкретную сделку. Pest: `tests/Feature/InstancePermissionTest.php`.
 
 ### 2.9 Permission audit / unused tracking ✅ (P2, M) — _Сделано_
 
@@ -765,8 +765,8 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 1.6 | SAML/OIDC SSO | P1 | L | 3 |
 | 2.1 | Wildcard permissions ✅ | P1 | M | 2 |
 | 2.3 | Role inheritance ✅ | P1 | L | 3 |
-| 2.4 | ABAC layer | P1 | L | 3 |
-| 2.6 | Approval workflows | P1 | L | 3 |
+| 2.4 | ABAC layer ✅ | P1 | L | 3 |
+| 2.6 | Approval workflows ✅ | P1 | L | 3 |
 | 2.7 | Time-bound elevated access ✅ | P1 | M | 2 |
 | 3.1 | Diff visualization | P1 | M | 2 |
 | 3.2 | Audit filters | P1 | S | 1 |
@@ -803,7 +803,7 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 1.10 | Password policies ✅ | P2 | S | 2 |
 | 2.2 | Permission groups ✅ | P2 | S | 3 |
 | 2.5 | Permission diff ✅ | P2 | M | 3 |
-| 2.8 | Resource-instance perms | P2 | L | 4 |
+| 2.8 | Resource-instance perms ✅ | P2 | L | 4 |
 | 2.9 | Permission usage tracking ✅ | P2 | M | 3 |
 | 2.10 | Role cloning ✅ | P2 | S | 2 |
 | 3.3 | Sentry/Datadog | P1 | S | 2 |

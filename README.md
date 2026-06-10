@@ -43,7 +43,7 @@
 
 ### RBAC
 
-- **42 атомарных permission** в формате `module.action`, описанных как **PHP enum** `App\Enums\Permission` — type-safe, IDE-friendly, синхронизируются в БД сидером.
+- **45 атомарных permission** в формате `module.action`, описанных как **PHP enum** `App\Enums\Permission` — type-safe, IDE-friendly, синхронизируются в БД сидером.
 - **5 системных ролей** (`tenant-admin`, `manager`, `sales`, `auditor`, `viewer`) с уровнями (`level: 0-100`) для предотвращения privilege escalation.
 - **Несколько ролей у одного пользователя** + **TTL** через `role_user.expires_at`.
 - **JIT / time-bound elevated access** — tenant-admin выдаёт пользователю **временную роль на N часов** (`GrantTemporaryRole`), не трогая постоянные назначения; права исчезают автоматически по истечении срока.
@@ -54,8 +54,11 @@
 - **Custom roles per tenant** — tenant-admin создаёт свои роли (с `level < собственного`) и собирает их из permissions, которыми сам владеет; либо **клонирует** существующую роль (`CloneRole`, кнопка «Clone») в редактируемую копию на уровень ниже.
 - **Permission preview / impact** — на странице роли live-индикатор «Unsaved: +N / −M», diff применённых изменений и список затронутых пользователей.
 - **Usage tracking** — команда `php artisan rbac:usage` и каталог super-admin показывают по каждому праву число ролей/прямых выдач и количество отказов за окно (дефолт 30 дней), подсвечивая «мёртвые» permissions.
+- **ABAC (атрибутные условия)** — таблица `permission_conditions` + JSON-DSL (`all`/`any`/`not`, листья `{attr, op, value}`, ссылки `$user.id`). `AbacGate` подключён в `TenantAuthorizer` **после** проверки права и может его сузить (все применимые условия должны выполняться). Аддитивно: право без условий работает как раньше. UI: `Admin → Access conditions` (для держателей `permissions.assign`).
+- **ReBAC (права на экземпляр ресурса)** — таблица `resource_permissions` + `InstancePermissionGate`: можно выдать пользователю доступ к **конкретной** сделке, минуя роли. Подключён как fallback-стадия `TenantAuthorizer` (только расширяет доступ, не отменяет проверки активности/тенанта). UI: блок «Instance permissions (ReBAC)» на странице сделки.
+- **Approval workflows** — крупные сделки (`amount >= rbac.approvals.deal_threshold`, дефолт $100k) уходят в многошаговое одобрение (`manager → tenant-admin`) вместо мгновенного закрытия. Инициатор не может одобрять свой запрос (separation of duties), reject возвращает сделку в `active`. UI: очередь `Approvals` с прогрессом шагов и бейджем в сайдбаре.
 - **Separation of duties** — конфигурируемые `forbidden_role_pairs` в `config/rbac.php` (например, нельзя совмещать `auditor` + `tenant-admin`).
-- **Гибридная авторизация**: `Gate::before` для super-admin → Policies возвращают `Response::allow()/deny('reason')` → каждая Policy делегирует в `TenantAuthorizer`, который проверяет 6 уровней (super → user active → tenant active → cross-tenant → permission → контекстные правила).
+- **Гибридная авторизация**: `Gate::before` для super-admin → Policies возвращают `Response::allow()/deny('reason')` → каждая Policy делегирует в `TenantAuthorizer`, который проверяет уровни: super → user active → tenant active → cross-tenant → permission (роль/наследование/прямые/wildcard) **или** instance-grant (ReBAC) → ABAC-условия → контекстные правила Policy.
 - **Кэш permissions** на user/tenant в `cache.store=database`, TTL настраивается, автоматическая инвалидация при изменениях ролей/прямых permissions.
 
 ### CRM
@@ -195,6 +198,8 @@ RBAC_BUSINESS_HOURS_START=9
 RBAC_BUSINESS_HOURS_END=18
 RBAC_BUSINESS_HOURS_WEEKDAYS_ONLY=true
 RBAC_INVITATION_TTL_DAYS=7
+RBAC_USAGE_WINDOW_DAYS=30
+RBAC_APPROVAL_DEAL_THRESHOLD=100000   # сделки >= порога уходят в multi-step approval
 ```
 
 ## Запуск
@@ -263,6 +268,7 @@ php artisan serve
 | `activities.delete`| ✓ |   |   |   |   |
 | `audit.view`      | ✓ | ✓ |   | ✓ |   |
 | `audit.export`    | ✓ |   |   | ✓ |   |
+| `approvals.view`  | ✓ | ✓ |   |   |   |
 | `features.view`   | ✓ |   |   |   |   |
 
 ### Что роль может — простыми словами
@@ -354,6 +360,9 @@ php artisan serve
 24. **Permission diff / impact** — откройте роль, у которой есть пользователи: справа панель _Impact_ с их списком. Поменяйте чекбоксы — заголовок покажет «Unsaved: +N / −M». Сохраните → блок _Last change_ перечислит добавленные/удалённые slug-и.
 25. **Clone role** — `Roles → Clone` напротив `Manager` → создаётся редактируемая копия уровнем ниже с теми же правами; вы попадёте в её редактор.
 26. **Usage report** — `php artisan rbac:usage` в терминале (таблица по правам). В UI super-admin откройте `Permissions` — столбцы Roles / Direct users / Denied и подсветка невыданных прав. Сгенерируйте отказ (зайдите ролью без `deals.delete` и попробуйте удалить сделку), запустите `rbac:usage` ещё раз — счётчик Denied у `deals.delete` вырастет.
+27. **ABAC-условие** — `admin@acme.test` → `Access conditions`. Демо-условие запрещает удалять `closed`-сделки. Добавьте своё: permission `deals.approve`, JSON `{"attr":"deal.owner_id","op":"=","value":"$user.id"}` — теперь approve сработает только для владельца сделки. Удалите условие, чтобы вернуть прежнее поведение.
+28. **ReBAC instance-grant** — откройте сделку под `admin@acme.test`, блок _Instance permissions (ReBAC)_: выдайте `Vince Viewer` право `deals.update` на эту сделку. Зайдите как `viewer@acme.test` — редактировать можно только эту сделку, остальные — нет. (В демо у Vince уже есть один такой грант.)
+29. **Approval workflow** — как `manager@acme.test` откройте дорогую сделку (`Enterprise platform rollout`, $250k) и нажмите _Approve & close_ — вместо закрытия сделка уходит в `Pending approval` (2 шага). Шаг 1 должен одобрить **другой** manager, шаг 2 — `admin@acme.test`. После второго одобрения сделка закрывается (`won/closed`); _Reject_ на любом шаге возвращает её в `active`. Пункт `Approvals` в сайдбаре показывает бейдж с числом ожидающих вашего решения.
 
 ## Структура проекта
 

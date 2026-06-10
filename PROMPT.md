@@ -1293,3 +1293,69 @@ No migration (reads `permission_role`, `permission_user`, `audit_logs`).
 - [ ] Saving role permissions flashes an added/removed diff and the edit page shows the count of affected users.
 - [ ] Cloning `manager` yields an editable `is_system=false` role one level lower with identical permissions and the same parent.
 - [ ] `php artisan rbac:usage` prints per-permission stats; the super-admin permissions catalog shows the same numbers and flags never-granted permissions.
+
+## 24. Advanced authorization wave (Improvements 2.4 ABAC, 2.6 approval workflows, 2.8 instance-level ReBAC)
+
+This wave adds two **additive** authorization gates around the static permission check and a multi-step approval workflow. All three are designed so existing behaviour is unchanged when their tables are empty.
+
+### 24.0 Shared additions
+
+- **`app/Enums/Permission.php`** — add `ApprovalsView = 'approvals.view'`.
+- **`app/Enums/DealStatus.php`** — add `PendingApproval = 'pending_approval'`; change `label()` to `ucwords(str_replace('_', ' ', $this->value))`.
+- **`app/Enums/AuditAction.php`** — add `ApprovalRequested`, `ApprovalStepApproved`, `ApprovalStepRejected`, `ApprovalCompleted`, `ResourcePermissionGranted`, `ResourcePermissionRevoked`, `PermissionConditionCreated`, `PermissionConditionDeleted`.
+- **`database/migrations/...create_deals_table.php`** — the `status` enum must include `pending_approval`: `enum('status', ['draft', 'active', 'pending_approval', 'closed'])`.
+- **`database/seeders/ModuleSeeder.php`** — add module `['slug' => 'approvals', 'name' => 'Approvals', 'sort_order' => 105]` (so `PermissionSeeder` seeds `approvals.view` + the `approvals.*` wildcard).
+- **`app/Authorization/RoleRegistry.php`** — add `Permission::ApprovalsView` to the `manager` role (tenant-admin already gets it via `Permission::cases()`).
+- **`config/rbac.php`** — add an `approvals` block: `'deal_threshold' => (float) env('RBAC_APPROVAL_DEAL_THRESHOLD', 100000)` and `'deal_steps' => ['manager', 'tenant-admin']`.
+
+### 24.1 ABAC layer (Improvement 2.4)
+
+- Migration `create_permission_conditions_table`: `id`, `tenant_id` nullable FK (null = global), `permission_id` FK, `role_id` nullable FK (null = all roles), `conditions` json, `description` nullable, timestamps; index `(tenant_id, permission_id)`.
+- Model `PermissionCondition` (casts `conditions` → array; relations `tenant`, `permission`, `role`). Does **not** use `BelongsToTenant` (tenant_id may be null).
+- `app/Authorization/ConditionEvaluator.php` — `satisfies(array $context, array $conditions): bool`. Recursive DSL: groups `all`/`any`/`not`; leaf `{attr, op, value}`; operators `= == != <> > < >= <= in not_in contains`; dot-path resolution from context; values starting with `$` are resolved from context (e.g. `"$user.id"`); scalars normalised to strings so `"5"` == `5`.
+- `app/Authorization/AbacGate.php` (`final readonly`, ctor `ConditionEvaluator`) — `passes(User, Permission, ?Model $resource, ?Tenant): bool`. Returns true when `$resource` is null or the permission slug is not in the cached `conditionedSlugs()` set (`Cache::rememberForever('rbac:abac:conditioned_slugs', ...)`). Otherwise loads applicable rows (`permission` slug matches; `tenant_id` null or current; `role_id` null or in the user's active role ids) and requires **all** of them to be satisfied (AND). Context = `['user' => attrs, 'resource' => attrs, snake(class_basename) => attrs]`. Static `flushCache()` clears the set.
+- `TenantAuthorizer::allows` — after a permission is granted, call `$this->abac->passes(...)`; if false return `Response::deny('Access conditions not met for: ...')`. Inject `AbacGate` into the constructor.
+- Action `CreatePermissionCondition` (`final readonly`, ctor `LogAuditEvent`) — light structural validation of the DSL (non-empty; valid group/leaf/op), creates the row, calls `AbacGate::flushCache()`, audits `PermissionConditionCreated`.
+- Controller `Admin/PermissionConditionController` (`index`/`store`/`destroy`), gated by `abort_unless($request->user()->hasPermission(Permission::PermissionsAssign), 403)`. `store` JSON-decodes the textarea, throwing a `conditions` `ValidationException` on bad JSON; `destroy` flushes the cache + audits `PermissionConditionDeleted` and only allows deleting tenant-scoped rows.
+- Routes in the `admin` group: `permission-conditions` index/store + `permission-conditions/{condition}` delete.
+- View `admin/permission-conditions/index.blade.php`: active conditions table, DSL cheatsheet, "New condition" form (permission select, optional role scope, JSON textarea, description). Sidebar link "Access conditions" gated by `permissions.assign`.
+- Seeder demo (Acme): condition on `deals.delete` requiring `deal.status != closed`.
+- Pest `tests/Feature/AbacConditionTest.php`.
+
+### 24.2 Instance-level ReBAC (Improvement 2.8)
+
+- Migration `create_resource_permissions_table`: `id`, `tenant_id` FK, `user_id` FK, `permission_id` FK, `resource_type` string, `resource_id` unsignedBigInteger, `expires_at` nullable, `assigned_by` nullable FK, timestamps; index `(user_id, resource_type, resource_id)` + unique `(user_id, permission_id, resource_type, resource_id)`.
+- Model `ResourcePermission` (uses `BelongsToTenant`; casts `expires_at`; relations `user`, `permission`, `assignedBy`, `resource` morphTo; `isExpired()`).
+- `app/Authorization/InstancePermissionGate.php` — `allows(User, Permission, Model $resource): bool` checks for a non-expired grant matching user + permission slug + `$resource->getMorphClass()`/key.
+- `TenantAuthorizer::allows` — when the static permission is **missing** and a `$resource` is provided, return `Response::allow()` if `instanceGate->allows(...)` (ReBAC fallback). Tenant/active/cross-tenant guards above still apply. Inject `InstancePermissionGate`.
+- Actions `GrantResourcePermission` (updateOrCreate + audit `ResourcePermissionGranted`) and `RevokeResourcePermission` (delete + audit `ResourcePermissionRevoked`).
+- `DealController::show` loads existing grants + assignable users + the four `deals.*` instance permissions; `grantInstancePermission` / `revokeInstancePermission` methods gated by `permissions.assign`. Routes: `deals/{deal}/instance-permissions` (post) + `.../{resourcePermission}` (delete).
+- View `crm/deals/show.blade.php`: "Instance permissions (ReBAC)" card (list + revoke + grant form with optional expiry), shown only to `permissions.assign` holders.
+- Seeder demo (Acme): viewer gets `deals.update` on one specific deal.
+- Pest `tests/Feature/InstancePermissionTest.php`.
+
+### 24.3 Approval workflows (Improvement 2.6)
+
+- Enum `app/Enums/ApprovalStatus.php`: `Pending`/`Approved`/`Rejected` + `label()`.
+- Migration `create_approval_requests_table`: `id`, `tenant_id` FK, `morphs('approvable')`, `requested_by` nullable FK, `status` string default `pending`, `current_step` unsignedSmallInteger default 1, `payload` json nullable, timestamps; index `(tenant_id, status)`.
+- Migration `create_approval_steps_table`: `id`, `approval_request_id` FK, `step` unsignedSmallInteger, `approver_role_id` nullable FK, `decided_by` nullable FK, `decided_at` nullable, `decision` nullable, `note` nullable, timestamps; unique `(approval_request_id, step)`.
+- Model `ApprovalRequest` (uses `BelongsToTenant`; casts `status`→enum, `payload`→array; relations `approvable` morphTo, `requester`, `steps` ordered hasMany; `currentStep()`, `isPending()`, `canBeDecidedBy(User)`, static `pendingForUser(User): Builder`). `canBeDecidedBy`: pending + decider ≠ requester + (super-admin OR step role null OR user holds the step's active role). `pendingForUser`: pending requests where decider ≠ requester and the current step's role is null or in the user's active roles.
+- Model `ApprovalStep` (casts `step`/`decided_at`; relations `request`, `role`, `decider`).
+- `Deal` model — add `approvalRequests(): MorphMany`.
+- Action `RequestApproval` (ctor `LogAuditEvent`) — `handle(Model $approvable, User $requester, array $stepRoleSlugs)`: in a transaction creates the request (pending, step 1), one `ApprovalStep` per slug mapped to the tenant role id, sets a `Deal` to `PendingApproval`, audits `ApprovalRequested`.
+- Action `DecideApprovalStep` (ctor `LogAuditEvent`) — `handle(ApprovalRequest, User $decider, bool $approve, ?string $note)`: throws `DomainException` if `! canBeDecidedBy`; records the step decision; on reject → request `Rejected` + deal back to `Active` + audit `ApprovalStepRejected`; on approve → audit `ApprovalStepApproved`, then if last step → request `Approved` + deal `won/closed` + audit `ApprovalCompleted`, else `increment('current_step')`.
+- `DealController::approve(Request, Tenant, Deal, RequestApproval, LogAuditEvent)` — if `amount >= config('rbac.approvals.deal_threshold')` and no pending request, create the multi-step request and redirect; otherwise close immediately as before.
+- Controller `Crm/ApprovalController` (`index`, `decide`) gated by `hasPermission(ApprovalsView)`. `index` lists pending + last 20 decided; `decide` validates `decision in approve,reject` + optional `note`, calls the action, catches `DomainException` → `back()->with('error', ...)`. Routes in the `crm` group: `approvals` (get) + `approvals/{approvalRequest}/decide` (post).
+- View `crm/approvals/index.blade.php`: pending cards with step progress + Approve/Reject form (only when `canBeDecidedBy`) + recently-decided table. Sidebar "Approvals" link gated by `approvals.view` with a pending-count badge (`ApprovalRequest::pendingForUser($user)->count()`); deal show page shows a "Pending approval" banner.
+- Seeder demo (Acme): a high-value (`amount = 250000`) active deal ready for the flow.
+- Pest `tests/Feature/ApprovalWorkflowTest.php` (uses `travelTo` a weekday business hour because `DealPolicy::approve` enforces business hours).
+
+### 24.4 Acceptance checklist (delta on top of sections 19, 22, 23)
+
+- [ ] `php artisan test` reports **>=149** passing tests with all section-24 files included; `vendor/bin/pint --dirty` is clean.
+- [ ] With no ABAC/ReBAC rows and no high-value deals, behaviour is identical to section 23 (gates are additive).
+- [ ] An ABAC condition `deal.owner_id = $user.id` on `deals.approve` denies a granted user on a deal they don't own and allows on one they do; role-scoped conditions only affect users in that role; all applicable conditions must hold (AND).
+- [ ] A user without `deals.update` can update exactly one deal after an instance grant; the grant is ignored once `expires_at` passes; cross-tenant/inactive guards are never bypassed.
+- [ ] Approving a deal `>= $100k` creates a 2-step pending request and sets the deal to `pending_approval`; below threshold closes immediately.
+- [ ] The requester cannot decide their own request; two distinct approvers (a second `manager`, then a `tenant-admin`) complete the flow and close the deal; a rejection returns the deal to `active`.
+- [ ] The "Approvals" sidebar entry shows a pending-count badge only to users who can decide the current step.
