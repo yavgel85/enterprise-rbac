@@ -43,4 +43,7 @@ enum AuditAction: string
     case EmailVerified = 'email_verified';
 
     case SessionTerminated = 'session_terminated';
+
+    case PermissionConditionCreated = 'permission_condition_created';
+    case PermissionConditionDeleted = 'permission_condition_deleted';
 }

@@ -36,6 +36,9 @@
             <a href="{{ route('admin.users.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.users.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Users</a>
             <a href="{{ route('admin.roles.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.roles.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Roles</a>
             <a href="{{ route('admin.permissions.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.permissions.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Permissions</a>
+            @if ($user->hasPermission(\App\Enums\Permission::PermissionsAssign))
+                <a href="{{ route('admin.permission-conditions.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.permission-conditions.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Access conditions</a>
+            @endif
             <a href="{{ route('admin.departments.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.departments.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Departments</a>
             <a href="{{ route('admin.audit.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.audit.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Audit log</a>
         @endif

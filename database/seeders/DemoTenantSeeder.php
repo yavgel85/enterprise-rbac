@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Database\Seeders;
 
 use App\Actions\Tenant\BootstrapTenant;
+use App\Authorization\AbacGate;
 use App\Enums\CompanyStatus;
 use App\Enums\DealStage;
 use App\Enums\DealStatus;
@@ -17,6 +18,7 @@ use App\Models\Deal;
 use App\Models\Department;
 use App\Models\Feature;
 use App\Models\Permission;
+use App\Models\PermissionCondition;
 use App\Models\Role;
 use App\Models\Task;
 use App\Models\Tenant;
@@ -32,6 +34,8 @@ class DemoTenantSeeder extends Seeder
     {
         $this->seedAcme();
         $this->seedGlobex();
+
+        AbacGate::flushCache();
     }
 
     private function seedAcme(): void
@@ -71,6 +75,15 @@ class DemoTenantSeeder extends Seeder
         $this->attachRole($temp, $tenant, 'sales', expiresAt: now()->addDays(7));
 
         $this->seedCrmData($tenant, $sales, $sales1, $manager);
+
+        // 2.4 ABAC: closed deals can never be deleted, regardless of role.
+        $this->attachPermissionCondition(
+            $tenant,
+            'deals.delete',
+            null,
+            ['attr' => 'deal.status', 'op' => '!=', 'value' => 'closed'],
+            'Closed deals cannot be deleted',
+        );
     }
 
     private function seedGlobex(): void
@@ -149,6 +162,22 @@ class DemoTenantSeeder extends Seeder
                 'type' => $type->value,
                 'reason' => $reason,
             ],
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $conditions
+     */
+    private function attachPermissionCondition(Tenant $tenant, string $slug, ?int $roleId, array $conditions, ?string $description = null): void
+    {
+        $permission = Permission::query()->where('slug', $slug)->firstOrFail();
+
+        PermissionCondition::create([
+            'tenant_id' => $tenant->id,
+            'permission_id' => $permission->id,
+            'role_id' => $roleId,
+            'conditions' => $conditions,
+            'description' => $description,
         ]);
     }
 

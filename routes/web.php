@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Admin\AuditController as AdminAuditController;
 use App\Http\Controllers\Admin\DepartmentController;
+use App\Http\Controllers\Admin\PermissionConditionController;
 use App\Http\Controllers\Admin\PermissionController as AdminPermissionController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\UserController;
@@ -115,6 +116,10 @@ Route::middleware('auth')->group(function () {
                 Route::get('permissions/users/{user}', [AdminPermissionController::class, 'userEdit'])->name('permissions.user.edit');
                 Route::post('permissions/users/{user}', [AdminPermissionController::class, 'userGrant'])->name('permissions.user.grant');
                 Route::delete('permissions/users/{user}/{permission}', [AdminPermissionController::class, 'userRevoke'])->name('permissions.user.revoke');
+
+                Route::get('permission-conditions', [PermissionConditionController::class, 'index'])->name('permission-conditions.index');
+                Route::post('permission-conditions', [PermissionConditionController::class, 'store'])->name('permission-conditions.store');
+                Route::delete('permission-conditions/{condition}', [PermissionConditionController::class, 'destroy'])->name('permission-conditions.destroy');
 
                 Route::get('departments', [DepartmentController::class, 'index'])->name('departments.index');
                 Route::post('departments', [DepartmentController::class, 'store'])->name('departments.store');

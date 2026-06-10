@@ -13,7 +13,10 @@ use Illuminate\Database\Eloquent\Model;
 
 final readonly class TenantAuthorizer
 {
-    public function __construct(private ResolveUserPermissions $resolve) {}
+    public function __construct(
+        private ResolveUserPermissions $resolve,
+        private AbacGate $abac,
+    ) {}
 
     /**
      * Returns Response::allow() / Response::deny('reason') based on a layered check:
@@ -22,6 +25,7 @@ final readonly class TenantAuthorizer
      *  3. Tenant must be present and active.
      *  4. Resource (if provided) must belong to the same tenant.
      *  5. User must have the required permission.
+     *  6. ABAC conditions attached to the permission must hold (2.4).
      */
     public function allows(User $user, Permission $permission, ?Tenant $tenant = null, ?Model $resource = null): Response
     {
@@ -45,8 +49,14 @@ final readonly class TenantAuthorizer
 
         $permissions = $this->resolve->handle($user);
 
-        return isset($permissions[$permission->value])
-            ? Response::allow()
-            : Response::deny("Missing permission: {$permission->value}");
+        if (! isset($permissions[$permission->value])) {
+            return Response::deny("Missing permission: {$permission->value}");
+        }
+
+        if (! $this->abac->passes($user, $permission, $resource, $tenant)) {
+            return Response::deny("Access conditions not met for: {$permission->value}");
+        }
+
+        return Response::allow();
     }
 }
