@@ -23,6 +23,7 @@ class ModuleSeeder extends Seeder
             ['slug' => 'tasks', 'name' => 'Tasks', 'description' => 'Task tracking', 'sort_order' => 80],
             ['slug' => 'activities', 'name' => 'Activities', 'description' => 'Calls, meetings, emails, notes', 'sort_order' => 90],
             ['slug' => 'audit', 'name' => 'Audit', 'description' => 'Audit log access', 'sort_order' => 100],
+            ['slug' => 'approvals', 'name' => 'Approvals', 'description' => 'Multi-step approval queue', 'sort_order' => 105],
             ['slug' => 'features', 'name' => 'Features', 'description' => 'Feature flag visibility', 'sort_order' => 110],
         ];
 

@@ -59,6 +59,8 @@ enum Permission: string
     case AuditView = 'audit.view';
     case AuditExport = 'audit.export';
 
+    case ApprovalsView = 'approvals.view';
+
     case FeaturesView = 'features.view';
 
     public function module(): string

@@ -25,7 +25,7 @@ return new class extends Migration
             $table->timestamp('closed_at')->nullable();
             $table->foreignId('owner_id')->nullable()->constrained('users')->nullOnDelete();
             $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
-            $table->enum('status', ['draft', 'active', 'closed'])->default('draft');
+            $table->enum('status', ['draft', 'active', 'pending_approval', 'closed'])->default('draft');
             $table->timestamps();
             $table->softDeletes();
 

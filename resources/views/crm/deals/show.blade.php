@@ -11,16 +11,26 @@
         </p>
         <div class="flex gap-2">
             @can('approve', $deal)
-                <form method="POST" action="{{ route('crm.deals.approve', [$tenant, $deal]) }}">
-                    @csrf
-                    <button type="submit" class="rounded-md bg-green-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-green-500">Approve & close</button>
-                </form>
+                @if (! $pendingApproval)
+                    <form method="POST" action="{{ route('crm.deals.approve', [$tenant, $deal]) }}">
+                        @csrf
+                        <button type="submit" class="rounded-md bg-green-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-green-500">Approve & close</button>
+                    </form>
+                @endif
             @endcan
             @can('update', $deal)
                 <a href="{{ route('crm.deals.edit', [$tenant, $deal]) }}" class="rounded-md bg-white px-3.5 py-2 text-sm font-semibold text-gray-900 ring-1 ring-gray-300 hover:bg-gray-50">Edit</a>
             @endcan
         </div>
     </div>
+
+    @if ($pendingApproval)
+        <div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <strong>Pending approval</strong> — step {{ $pendingApproval->current_step }} of {{ $pendingApproval->steps->count() }}.
+            Requested by {{ $pendingApproval->requester?->name }}.
+            <a href="{{ route('crm.approvals.index', $tenant) }}" class="underline">View approval queue</a>
+        </div>
+    @endif
 
     <div class="bg-white rounded-lg border border-gray-200 shadow-sm p-6 space-y-3 text-sm">
         <div class="flex"><span class="w-40 text-gray-500">Amount</span><span>{{ number_format((float) $deal->amount, 2) }} {{ $deal->currency }}</span></div>

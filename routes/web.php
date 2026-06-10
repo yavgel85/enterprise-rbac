@@ -13,6 +13,7 @@ use App\Http\Controllers\Auth\InvitationController;
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Crm\ActivityController;
+use App\Http\Controllers\Crm\ApprovalController;
 use App\Http\Controllers\Crm\CompanyController;
 use App\Http\Controllers\Crm\ContactController;
 use App\Http\Controllers\Crm\DealController;
@@ -139,6 +140,9 @@ Route::middleware('auth')->group(function () {
                 Route::delete('deals/{deal}/instance-permissions/{resourcePermission}', [DealController::class, 'revokeInstancePermission'])->name('deals.instance-permissions.revoke');
                 Route::resource('tasks', TaskController::class);
                 Route::post('tasks/{task}/complete', [TaskController::class, 'complete'])->name('tasks.complete');
+
+                Route::get('approvals', [ApprovalController::class, 'index'])->name('approvals.index');
+                Route::post('approvals/{approvalRequest}/decide', [ApprovalController::class, 'decide'])->name('approvals.decide');
 
                 Route::get('activities', [ActivityController::class, 'index'])->name('activities.index');
                 Route::get('activities/create', [ActivityController::class, 'create'])->name('activities.create');

@@ -89,6 +89,19 @@ class DemoTenantSeeder extends Seeder
         // 2.8 ReBAC: the viewer gets edit access to a single deal instance.
         $oneDeal = Deal::query()->where('tenant_id', $tenant->id)->firstOrFail();
         $this->attachResourcePermission($tenant, $viewer, 'deals.update', $oneDeal, $admin);
+
+        // 2.6 Approvals: a high-value active deal awaiting the multi-step flow.
+        Deal::factory()->create([
+            'tenant_id' => $tenant->id,
+            'company_id' => $oneDeal->company_id,
+            'department_id' => $sales->id,
+            'owner_id' => $sales1->id,
+            'created_by' => $manager->id,
+            'title' => 'Enterprise platform rollout',
+            'amount' => 250000,
+            'stage' => DealStage::Negotiation->value,
+            'status' => DealStatus::Active->value,
+        ]);
     }
 
     private function seedGlobex(): void

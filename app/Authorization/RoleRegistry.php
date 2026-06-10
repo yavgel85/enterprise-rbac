@@ -48,6 +48,7 @@ final class RoleRegistry
                     Permission::ActivitiesCreate,
                     Permission::ActivitiesUpdate,
                     Permission::AuditView,
+                    Permission::ApprovalsView,
                 ],
                 description: 'CRM full access + audit visibility',
                 parentSlug: 'sales',

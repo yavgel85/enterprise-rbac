@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Crm;
 
+use App\Actions\Approvals\RequestApproval;
 use App\Actions\Audit\LogAuditEvent;
 use App\Actions\Authorization\GrantResourcePermission;
 use App\Actions\Authorization\RevokeResourcePermission;
+use App\Enums\ApprovalStatus;
 use App\Enums\AuditAction;
 use App\Enums\DealStage;
 use App\Enums\DealStatus;
@@ -74,6 +76,7 @@ class DealController extends Controller
         return view('crm.deals.show', [
             'deal' => $deal,
             'tenant' => $tenant,
+            'pendingApproval' => $deal->approvalRequests()->where('status', ApprovalStatus::Pending->value)->latest()->first(),
             'instanceGrants' => $instanceGrants,
             'assignableUsers' => User::query()->where('tenant_id', $tenant->id)->orderBy('name')->get(['id', 'name']),
             'instancePermissions' => Permission::query()
@@ -110,9 +113,22 @@ class DealController extends Controller
             ->with('status', 'Deal deleted.');
     }
 
-    public function approve(Tenant $tenant, Deal $deal, LogAuditEvent $audit): RedirectResponse
+    public function approve(Request $request, Tenant $tenant, Deal $deal, RequestApproval $requestApproval, LogAuditEvent $audit): RedirectResponse
     {
         $this->authorize('approve', $deal);
+
+        $threshold = (float) config('rbac.approvals.deal_threshold');
+
+        if ((float) $deal->amount >= $threshold) {
+            if ($deal->approvalRequests()->where('status', ApprovalStatus::Pending->value)->exists()) {
+                return back()->with('error', 'This deal already has a pending approval request.');
+            }
+
+            $requestApproval->handle($deal, $request->user(), (array) config('rbac.approvals.deal_steps'));
+
+            return redirect()->route('crm.deals.show', [$tenant, $deal])
+                ->with('status', 'Deal submitted for multi-step approval.');
+        }
 
         $deal->update([
             'stage' => DealStage::Won->value,

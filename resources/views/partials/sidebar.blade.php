@@ -31,6 +31,15 @@
             <a href="{{ route('crm.deals.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('crm.deals.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Deals</a>
             <a href="{{ route('crm.tasks.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('crm.tasks.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Tasks</a>
             <a href="{{ route('crm.activities.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('crm.activities.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Activities</a>
+            @if ($user->hasPermission(\App\Enums\Permission::ApprovalsView))
+                @php($pendingApprovals = \App\Models\ApprovalRequest::pendingForUser($user)->count())
+                <a href="{{ route('crm.approvals.index', $tenant) }}" class="flex items-center justify-between px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('crm.approvals.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">
+                    <span>Approvals</span>
+                    @if ($pendingApprovals > 0)
+                        <span class="inline-flex items-center justify-center rounded-full bg-amber-500 px-2 text-xs font-semibold text-gray-900">{{ $pendingApprovals }}</span>
+                    @endif
+                </a>
+            @endif
 
             <div class="px-3 pt-4 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Administration</div>
             <a href="{{ route('admin.users.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.users.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Users</a>

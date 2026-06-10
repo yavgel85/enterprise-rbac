@@ -49,4 +49,9 @@ enum AuditAction: string
 
     case ResourcePermissionGranted = 'resource_permission_granted';
     case ResourcePermissionRevoked = 'resource_permission_revoked';
+
+    case ApprovalRequested = 'approval_requested';
+    case ApprovalStepApproved = 'approval_step_approved';
+    case ApprovalStepRejected = 'approval_step_rejected';
+    case ApprovalCompleted = 'approval_completed';
 }

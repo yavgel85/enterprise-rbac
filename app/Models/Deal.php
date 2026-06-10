@@ -91,4 +91,9 @@ class Deal extends Model
     {
         return $this->morphMany(Activity::class, 'subjectable');
     }
+
+    public function approvalRequests(): MorphMany
+    {
+        return $this->morphMany(ApprovalRequest::class, 'approvable');
+    }
 }

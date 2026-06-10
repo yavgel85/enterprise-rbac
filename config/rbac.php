@@ -81,4 +81,18 @@ return [
         'window_days' => (int) env('RBAC_USAGE_WINDOW_DAYS', 30),
         'cache_ttl' => (int) env('RBAC_USAGE_CACHE_TTL', 86400),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Approval workflows
+    |--------------------------------------------------------------------------
+    | Deals whose amount is >= deal_threshold are not closed immediately on
+    | "approve"; instead a multi-step ApprovalRequest is created. Each step is
+    | tied to a role slug and must be decided by a *different* person than the
+    | requester. Steps are decided in order.
+    */
+    'approvals' => [
+        'deal_threshold' => (float) env('RBAC_APPROVAL_DEAL_THRESHOLD', 100000),
+        'deal_steps' => ['manager', 'tenant-admin'],
+    ],
 ];
