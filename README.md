@@ -43,7 +43,7 @@
 
 ### RBAC
 
-- **45 атомарных permission** в формате `module.action`, описанных как **PHP enum** `App\Enums\Permission` — type-safe, IDE-friendly, синхронизируются в БД сидером.
+- **46 атомарных permission** в формате `module.action`, описанных как **PHP enum** `App\Enums\Permission` — type-safe, IDE-friendly, синхронизируются в БД сидером.
 - **5 системных ролей** (`tenant-admin`, `manager`, `sales`, `auditor`, `viewer`) с уровнями (`level: 0-100`) для предотвращения privilege escalation.
 - **Несколько ролей у одного пользователя** + **TTL** через `role_user.expires_at`.
 - **JIT / time-bound elevated access** — tenant-admin выдаёт пользователю **временную роль на N часов** (`GrantTemporaryRole`), не трогая постоянные назначения; права исчезают автоматически по истечении срока.
@@ -80,6 +80,13 @@
 - Контекст: tenant_id, user_id, ip_address, user_agent, url.
 - Tenant-admin видит audit своего тенанта, super-admin — global audit с фильтрами по тенанту и по action.
 - CSV-export аудита (за feature-flag `audit_export`).
+- **Diff-просмотр и фильтры** — строки аудита раскрываются в side-by-side diff (`Field / Before / After` + metadata), фильтрация по пользователю и диапазону дат (`from`/`to`).
+- **Структурированный канал** — каждая запись зеркалится в Monolog-канал `audit` (см. `config/audit.php` → `log_channel`), который можно перенаправить во внешний коллектор (Sentry/Datadog/OpenTelemetry/rsyslog) без изменения кода.
+- **Per-tenant audit sinks** — таблица `audit_sinks` + UI `Admin → Audit sinks` (право `audit.manage`): tenant-admin настраивает webhook, на который queued-job `DeliverAuditLogToSink` шлёт подписанные (`X-Audit-Signature: sha256=hmac`) события в реальном времени; можно ограничить набором действий.
+- **Retention + archive** — команда `php artisan audit:archive` выгружает записи старше окна (per-tenant `tenants.settings.audit_retention_days`, иначе `config('audit.retention.default_days')`, дефолт 90) в JSONL на диск и удаляет из БД; запланирована ежедневно в `routes/console.php`.
+- **Critical-action confirmation** — деструктивные маршруты (suspend тенанта, удаление роли/sink, смена чужого пароля) закрыты middleware `password.confirm`.
+- **Observability dashboard** (super-admin) — KPI, график объёма аудита за 14 дней, топ-действия и лента security-событий.
+- **Live activity feed** — на дашборде тенанта виджет, опрашивающий JSON-эндпоинт `tenant.activity-feed` каждые 10с (право `audit.view`).
 
 ### Feature flags
 
@@ -190,7 +197,7 @@ npm run build
 
 ### Конфигурация
 
-Все RBAC-настройки в `config/rbac.php`. Можно переопределить через `.env`:
+RBAC-настройки в `config/rbac.php`, настройки аудита/observability — в `config/audit.php`. Можно переопределить через `.env`:
 
 ```env
 RBAC_CACHE_TTL=3600
@@ -200,6 +207,15 @@ RBAC_BUSINESS_HOURS_WEEKDAYS_ONLY=true
 RBAC_INVITATION_TTL_DAYS=7
 RBAC_USAGE_WINDOW_DAYS=30
 RBAC_APPROVAL_DEAL_THRESHOLD=100000   # сделки >= порога уходят в multi-step approval
+
+# Audit log & observability (config/audit.php)
+AUDIT_LOG_CHANNEL=audit               # Monolog-канал для зеркалирования аудита (null — выключить)
+AUDIT_RETENTION_DAYS=90               # окно хранения по умолчанию для audit:archive
+AUDIT_ARCHIVE_DISK=local              # диск для JSONL-архивов
+AUDIT_ARCHIVE_PATH=audit-archive      # путь на диске
+AUDIT_SINKS_ENABLED=true              # включить per-tenant webhook-доставку
+AUDIT_SINK_TIMEOUT=5                  # таймаут доставки, сек
+AUDIT_SINK_TRIES=3                    # число попыток queued-job доставки
 ```
 
 ## Запуск
@@ -268,6 +284,7 @@ php artisan serve
 | `activities.delete`| ✓ |   |   |   |   |
 | `audit.view`      | ✓ | ✓ |   | ✓ |   |
 | `audit.export`    | ✓ |   |   | ✓ |   |
+| `audit.manage`    | ✓ |   |   |   |   |
 | `approvals.view`  | ✓ | ✓ |   |   |   |
 | `features.view`   | ✓ |   |   |   |   |
 
@@ -363,6 +380,12 @@ php artisan serve
 27. **ABAC-условие** — `admin@acme.test` → `Access conditions`. Демо-условие запрещает удалять `closed`-сделки. Добавьте своё: permission `deals.approve`, JSON `{"attr":"deal.owner_id","op":"=","value":"$user.id"}` — теперь approve сработает только для владельца сделки. Удалите условие, чтобы вернуть прежнее поведение.
 28. **ReBAC instance-grant** — откройте сделку под `admin@acme.test`, блок _Instance permissions (ReBAC)_: выдайте `Vince Viewer` право `deals.update` на эту сделку. Зайдите как `viewer@acme.test` — редактировать можно только эту сделку, остальные — нет. (В демо у Vince уже есть один такой грант.)
 29. **Approval workflow** — как `manager@acme.test` откройте дорогую сделку (`Enterprise platform rollout`, $250k) и нажмите _Approve & close_ — вместо закрытия сделка уходит в `Pending approval` (2 шага). Шаг 1 должен одобрить **другой** manager, шаг 2 — `admin@acme.test`. После второго одобрения сделка закрывается (`won/closed`); _Reject_ на любом шаге возвращает её в `active`. Пункт `Approvals` в сайдбаре показывает бейдж с числом ожидающих вашего решения.
+30. **Audit diff + фильтры** — `admin@acme.test` → `Admin → Audit log`. Кликните строку с изменением (например `updated`) — раскроется side-by-side diff. Отфильтруйте по конкретному пользователю и диапазону дат `from/to`.
+31. **Audit sink (webhook)** — `admin@acme.test` → `Admin → Audit sinks`, создайте sink с endpoint (например `https://webhook.site/...`) и секретом. Совершите любое действие — на endpoint придёт подписанный POST (заголовок `X-Audit-Signature`). Поле _Last delivered_ обновится; неуспех попадёт в _Last error_.
+32. **Audit archive** — `php artisan audit:archive --dry-run` покажет, сколько записей попадёт под архивацию; `php artisan audit:archive` выгрузит старые записи в JSONL (`storage/app/audit-archive/{tenant}/...`) и удалит из БД, записав `audit_archived`. Окно можно переопределить через `tenants.settings.audit_retention_days` (`0` — выключить).
+33. **Critical-action confirmation** — `admin@acme.test` попробуйте удалить роль (`Roles → Delete`) или сменить чужой пароль — система перенаправит на `Confirm your password`. После ввода пароля действие выполнится.
+34. **Observability dashboard** — войдите как `super@…`, откройте `Observability` в сайдбаре: KPI-карточки, график объёма аудита за 14 дней, топ-действия и лента security-событий.
+35. **Live activity feed** — на дашборде тенанта (пользователь с правом `audit.view`, например `admin@acme.test` или `auditor@acme.test`) виджет _Live activity_ опрашивает сервер каждые 10с; совершите действие в другой вкладке — новая запись подсветится в ленте.
 
 ## Структура проекта
 
@@ -373,7 +396,8 @@ php artisan serve
 │   ├── app.php             # регистрация middleware-алиасов: tenant, permission, feature, super-admin
 │   └── providers.php       # AppServiceProvider + AuthServiceProvider
 ├── config/
-│   └── rbac.php            # cache_ttl, forbidden_role_pairs, business_hours, invitation_ttl_days
+│   ├── rbac.php            # cache_ttl, forbidden_role_pairs, business_hours, invitation_ttl_days, approvals
+│   └── audit.php           # log_channel, retention (archive), sinks (webhook delivery)
 ├── database/
 │   ├── migrations/         # 18 RBAC + CRM миграций (00–17, упорядочены по зависимостям)
 │   ├── factories/          # 13 factories
@@ -423,6 +447,10 @@ php artisan db:seed --class=Database\\Seeders\\PermissionGroupSeeder
 # отчёт по использованию permissions (роли/прямые выдачи/отказы); --unused — только невыданные
 php artisan rbac:usage
 php artisan rbac:usage --unused
+
+# архивировать старые записи аудита в JSONL и удалить из БД (--tenant=slug, --dry-run)
+php artisan audit:archive
+php artisan audit:archive --dry-run
 
 # список всех роутов
 php artisan route:list

@@ -256,37 +256,53 @@ Cron-команда `rbac:usage` — раз в день сканирует `audi
 
 ## 3. Audit log и observability
 
-### 3.1 Diff visualization в UI (P1, M)
+### 3.1 Diff visualization в UI ✅ (P1, M) — _Сделано_
 
 Сейчас `old_values`/`new_values` хранятся, но в `admin/audit/index` не показываются. Сделать "expand row" → side-by-side diff (Tailwind + Alpine.js).
 
-### 3.2 Filtering by user/date range (P1, S)
+> **Реализовано.** Строки аудита с изменениями стали раскрываемыми (vanilla-JS toggle, без Alpine — фронт проекта без JS-фреймворка). Партиал `admin/audit/_diff.blade.php` рисует side-by-side таблицу `Field / Before / After` (изменённые поля подсвечены `bg-amber-50`, старое — красным, новое — зелёным), плюс блок `Metadata` (pretty JSON) и исходный `url`. Pest: `tests/Feature/AuditObservabilityTest.php`.
+
+### 3.2 Filtering by user/date range ✅ (P1, S) — _Сделано_
 
 В админ-аудите добавить `user_id` selector, range pickers `from / to`. В SQL уже есть индекс `(user_id, created_at)`, использовать.
 
-### 3.3 Структурированный пайплайн в Sentry / Datadog (P1, S)
+> **Реализовано.** `Admin\AuditController@index` принимает `user_id`, `from`, `to` (в дополнение к `action`); добавлены `<select>` пользователей тенанта и два `date`-инпута, кнопка _Reset_. Фильтры сохраняются в пагинации через `withQueryString()`. Pest: `tests/Feature/AuditObservabilityTest.php`.
+
+### 3.3 Структурированный пайплайн в Sentry / Datadog ✅ (P1, S) — _Сделано_
 
 `AuditLog::created` event → publish в monolog `audit` channel → переправить в внешний sink (rsyslog/OpenTelemetry collector/Sentry breadcrumb).
 
-### 3.4 Audit log retention + archive (P1, M)
+> **Реализовано.** `AuditLogObserver` (через `#[ObservedBy]` на модели `AuditLog`) на каждое создание записи зеркалит структурированную запись в Monolog-канал `audit` (новый `daily`-канал в `config/logging.php`, имя берётся из `config('audit.log_channel')`). Канал можно перенаправить на внешний коллектор (Datadog agent, rsyslog, OpenTelemetry, Sentry breadcrumb) штатной конфигурацией logging без изменения кода. Pest: `tests/Feature/AuditObservabilityTest.php`.
+
+### 3.4 Audit log retention + archive ✅ (P1, M) — _Сделано_
 
 Cron `audit:archive` ежедневно перемещает записи `created_at < now()->subDays(90)` в JSONL-файл на S3 (по тенанту) и удаляет из БД. Настраивается per tenant: `tenants.settings.audit_retention_days`.
 
-### 3.5 Per-tenant audit channel (P2, M)
+> **Реализовано.** Команда `audit:archive` (`{--tenant=}`, `{--dry-run}`) для каждого тенанта берёт окно из `tenants.settings.audit_retention_days` (иначе `config('audit.retention.default_days')`, по умолчанию 90; `0` = retention выключен), выгружает старые строки в JSONL-файл на диск `config('audit.retention.disk')` по пути `audit-archive/{slug}/{timestamp}.jsonl`, удаляет их в транзакции и пишет аудит `audit_archived`. Запланирована в `routes/console.php` ежедневно в 02:00. Pest: `tests/Feature/AuditObservabilityTest.php`.
+
+### 3.5 Per-tenant audit channel ✅ (P2, M) — _Сделано_
 
 Возможность включить **Webhook** или **Kafka topic** для аудита → клиент в реальном времени видит у себя в SIEM. Таблица `audit_sinks(tenant_id, type, config, is_active)`.
 
-### 3.6 Critical-action confirmation (P1, S)
+> **Реализовано (webhook).** Таблица `audit_sinks` + модель `AuditSink` (`name`, `type`, `endpoint`, `secret`, `events[]`, `is_active`, поля доставки). `AuditLogObserver` веером раздаёт каждую запись активным sink'ам тенанта (фильтр по whitelist `events`, пустой = все действия) через queued job `DeliverAuditLogToSink`. Доставка — подписанный POST (`X-Audit-Signature: sha256=hmac`), с обновлением `last_delivered_at`/`last_failed_at`/`last_error` и ретраями (`config('audit.sinks.tries')`). UI `admin/audit-sinks` (CRUD, gate `audit.manage`). Pest: `tests/Feature/AuditObservabilityTest.php`.
+
+### 3.6 Critical-action confirmation ✅ (P1, S) — _Сделано_
 
 Перед `role.delete`, `user.delete`, `tenant.suspend` показывать модал с подтверждением пароля. Реализовать middleware `password.confirm` (есть в Laravel).
 
-### 3.7 Application monitoring (P1, M)
+> **Реализовано.** `Auth\ConfirmPasswordController` + страница `auth/confirm-password`, маршруты `password.confirm` (GET/POST, throttle). Middleware `password.confirm` навешен на деструктивные маршруты: `super-admin.tenants.toggle` (suspend/activate), `admin.roles.destroy`, `admin.users.password.update`, `admin.audit-sinks.destroy`. Pest: `tests/Feature/AuditObservabilityTest.php`.
+
+### 3.7 Application monitoring ✅ (P1, M) — _Сделано (lightweight)_
 
 Установить `laravel/pulse` + `laravel/telescope` (dev). Dashboard для query latency, queue depth, slow requests, exception rate.
 
-### 3.8 Real-time activity feed (P2, M)
+> **Реализовано (без сторонних пакетов).** `SuperAdmin\ObservabilityController` + страница `super-admin/observability`: KPI-карточки (активные тенанты, пользователи, заблокированные аккаунты, аудит-события за 24ч, неудачные логины, отказы в доступе, failed jobs), bar-chart объёма аудита за 14 дней, топ-действия за 24ч и лента последних security-событий (`login_failed`/`permission_denied`/`account_locked`). Доступ только super-admin. Тяжёлые Pulse/Telescope осознанно отложены (избыточны для текущего масштаба, добавляют инфра-зависимости). Pest: `tests/Feature/AuditObservabilityTest.php`.
+
+### 3.8 Real-time activity feed ✅ (P2, M) — _Сделано (polling)_
 
 Под `Dashboard` показать "Live activity" — broadcast event на канал `tenants.{id}.activity` через Laravel Reverb. Видно "Alice updated Deal X", "Bob completed Task Y".
+
+> **Реализовано (polling вместо WebSocket).** JSON-эндпоинт `tenant.activity-feed` (gate `audit.view`, инкрементальная отдача через `?after={id}`), виджет «Live activity» на дашборде опрашивает его каждые 10с, подсвечивает новые события и держит «пульс» статуса соединения. Выбран polling вместо Reverb, чтобы не тянуть отдельный WebSocket-сервер; апгрейд до broadcasting тривиален при необходимости. Pest: `tests/Feature/AuditObservabilityTest.php`.
 
 ---
 
@@ -768,11 +784,11 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 2.4 | ABAC layer ✅ | P1 | L | 3 |
 | 2.6 | Approval workflows ✅ | P1 | L | 3 |
 | 2.7 | Time-bound elevated access ✅ | P1 | M | 2 |
-| 3.1 | Diff visualization | P1 | M | 2 |
-| 3.2 | Audit filters | P1 | S | 1 |
-| 3.4 | Audit retention/archive | P1 | M | 2 |
-| 3.6 | Critical-action confirmation | P1 | S | 1 |
-| 3.7 | App monitoring | P1 | M | 2 |
+| 3.1 | Diff visualization ✅ | P1 | M | 2 |
+| 3.2 | Audit filters ✅ | P1 | S | 1 |
+| 3.4 | Audit retention/archive ✅ | P1 | M | 2 |
+| 3.6 | Critical-action confirmation ✅ | P1 | S | 1 |
+| 3.7 | App monitoring ✅ | P1 | M | 2 |
 | 4.9 | Docker dev | P1 | M | 1 |
 | 5.1 | Kanban board | P1 | M | 2 |
 | 5.2 | Pipeline analytics | P1 | M | 2 |
@@ -806,9 +822,9 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 2.8 | Resource-instance perms ✅ | P2 | L | 4 |
 | 2.9 | Permission usage tracking ✅ | P2 | M | 3 |
 | 2.10 | Role cloning ✅ | P2 | S | 2 |
-| 3.3 | Sentry/Datadog | P1 | S | 2 |
-| 3.5 | Per-tenant audit sinks | P2 | M | 3 |
-| 3.8 | Real-time activity feed | P2 | M | 3 |
+| 3.3 | Sentry/Datadog ✅ | P1 | S | 2 |
+| 3.5 | Per-tenant audit sinks ✅ | P2 | M | 3 |
+| 3.8 | Real-time activity feed ✅ | P2 | M | 3 |
 | 4.3 | N+1 audit | P1 | S | 1 |
 | 4.4 | Read replicas | P2 | L | 4 |
 | 4.6 | Horizontal scaling | P2 | M | 3 |

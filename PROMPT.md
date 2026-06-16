@@ -1359,3 +1359,65 @@ This wave adds two **additive** authorization gates around the static permission
 - [ ] Approving a deal `>= $100k` creates a 2-step pending request and sets the deal to `pending_approval`; below threshold closes immediately.
 - [ ] The requester cannot decide their own request; two distinct approvers (a second `manager`, then a `tenant-admin`) complete the flow and close the deal; a rejection returns the deal to `active`.
 - [ ] The "Approvals" sidebar entry shows a pending-count badge only to users who can decide the current step.
+
+---
+
+## 25. Audit log & observability wave (Improvements 3.1-3.8)
+
+This wave makes the audit trail observable: it surfaces diffs and filters in the UI, mirrors audit rows to a structured log channel and per-tenant webhook sinks, archives old rows, guards destructive routes with password confirmation, and adds a super-admin health dashboard plus a polling live feed. All additions are designed so that with no sinks configured and default config, existing behaviour is unchanged.
+
+### 25.0 Shared additions
+
+- **`app/Enums/Permission.php`** — add `AuditManage = 'audit.manage'` (in the `audit` module, so `PermissionSeeder` seeds it automatically and tenant-admin gets it via `Permission::cases()`).
+- **`app/Enums/AuditAction.php`** — add `AuditSinkCreated`, `AuditSinkUpdated`, `AuditSinkDeleted`, `AuditArchived`.
+- **`config/audit.php`** (new) — `log_channel` (`env('AUDIT_LOG_CHANNEL', 'audit')`); `retention` block (`default_days` env `AUDIT_RETENTION_DAYS` default 90, `disk` env `AUDIT_ARCHIVE_DISK` default `local`, `path` env `AUDIT_ARCHIVE_PATH` default `audit-archive`); `sinks` block (`enabled` env `AUDIT_SINKS_ENABLED` default true, `timeout` default 5, `tries` default 3).
+- **`config/logging.php`** — add a `daily` channel named `audit` (path `storage/logs/audit.log`, level configurable, retained days configurable).
+
+### 25.1 Structured audit log channel (Improvement 3.3)
+
+- `app/Observers/AuditLogObserver.php` — registered on the model via `#[ObservedBy(AuditLogObserver::class)]` on `AuditLog`. On `created()` it (a) forwards a structured record (`audit.{action}` + full payload array) to `Log::channel(config('audit.log_channel'))` when the channel is set, and (b) fans out to sinks (see 25.3). The channel can be repointed at Sentry/Datadog/OpenTelemetry/rsyslog via logging config alone.
+
+### 25.2 Audit UI: diff visualization + filters (Improvements 3.1, 3.2)
+
+- `Admin/AuditController@index` — additionally accepts `user_id`, `from`, `to` (kept alongside `action`); passes the tenant `users` list to the view. Filters persist through pagination via `withQueryString()`.
+- `resources/views/admin/audit/index.blade.php` — filter bar (action / user `<select>` / `from` / `to` date inputs / Reset); audit rows with `old_values`/`new_values`/`metadata` are clickable and toggle a hidden detail `<tr>` via a tiny vanilla-JS handler (the project ships no JS framework — do **not** use Alpine).
+- `resources/views/admin/audit/_diff.blade.php` (new partial) — side-by-side `Field / Before / After` table (changed rows highlighted `bg-amber-50`, before in red, after in green), a pretty-printed `Metadata` block, and the request `url`.
+
+### 25.3 Per-tenant audit sinks (Improvement 3.5)
+
+- Migration `create_audit_sinks_table`: `id`, `tenant_id` FK cascade, `name`, `type` default `webhook`, `endpoint`, `secret` nullable, `events` json nullable (null = all actions; otherwise whitelist of action slugs), `is_active` bool default true, `last_delivered_at`/`last_failed_at` nullable timestamps, `last_error` nullable string, timestamps; index `(tenant_id, is_active)`.
+- Model `AuditSink` (uses `BelongsToTenant`; `secret` hidden; casts `events`→array, `is_active`→bool, delivery timestamps; `listensTo(string $action): bool`).
+- Job `app/Jobs/DeliverAuditLogToSink` (`ShouldQueue`, ctor `int $sinkId, array $payload`, `tries()` from config) — loads the sink, skips if missing/inactive, POSTs the JSON payload with `Http::timeout(config('audit.sinks.timeout'))`, adds `X-Audit-Signature: sha256=<hmac>` header when a secret is set, records `last_delivered_at` on success and `last_failed_at`/`last_error` on failure (re-throwing on exceptions so the queue retries).
+- `AuditLogObserver::dispatchToSinks` — when `config('audit.sinks.enabled')` and the row has a tenant, dispatches `DeliverAuditLogToSink` for each active sink whose `listensTo($action)` is true.
+- Controller `Admin/AuditSinkController` (`index`/`store`/`update`/`destroy`), every method gated by `abort_unless($request->user()->hasPermission(Permission::AuditManage), 403)`; audits `AuditSinkCreated`/`Updated`/`Deleted`; `update` keeps the existing secret when the field is left blank.
+- Routes in the `admin` group: `audit-sinks` index/store, `audit-sinks/{auditSink}` put/delete (delete behind `password.confirm`). Sidebar link "Audit sinks" gated by `audit.manage`.
+- View `admin/audit-sinks/index.blade.php`: explainer card, list of sinks (status, endpoint, events, last delivery/error, inline edit + delete), "New sink" form (name, endpoint, optional secret, multi-select events, active toggle).
+
+### 25.4 Audit retention & archive (Improvement 3.4)
+
+- Command `app/Console/Commands/ArchiveAuditLogs` (signature `audit:archive {--tenant=} {--dry-run}`) — per tenant, resolve the window from `tenants.settings.audit_retention_days` (else `config('audit.retention.default_days')`; `0` disables); stream rows older than the cutoff to a JSONL file on `config('audit.retention.disk')` at `{path}/{slug}/{Y-m-d_His}.jsonl`, delete them in a transaction, and write an `audit_archived` audit row with `{rows, file, cutoff}` metadata. `--dry-run` reports counts without writing/deleting.
+- Schedule in `routes/console.php`: `Schedule::command('audit:archive')->dailyAt('02:00')`.
+
+### 25.5 Critical-action confirmation (Improvement 3.6)
+
+- `Auth/ConfirmPasswordController` (`show`/`store`) + view `auth/confirm-password.blade.php`; routes `password.confirm` (GET) and POST (throttled) inside the `auth` group. `store` validates the current user's password via `Auth::guard('web')->validate(...)` and stores `auth.password_confirmed_at` in the session.
+- Apply the framework `password.confirm` middleware to destructive routes: `super-admin.tenants.toggle`, `admin.roles.destroy`, `admin.users.password.update`, `admin.audit-sinks.destroy`. (Existing tests that hit `users.password.update` must seed `withSession(['auth.password_confirmed_at' => time()])`.)
+
+### 25.6 Observability dashboard (Improvement 3.7)
+
+- `SuperAdmin/ObservabilityController@index` — lightweight, DB-only metrics (no Pulse/Telescope): KPI counts (active/total tenants, users, currently-locked users, audit events 24h, failed logins 24h, permission denials 24h, `failed_jobs` count if the table exists), 14-day audit volume series, top 8 actions in 24h, and a recent security-events feed (`login_failed`/`permission_denied`/`account_locked`).
+- Route `super-admin.observability.index` in the `super-admin` group; view `super-admin/observability/index.blade.php` (KPI cards, CSS bar chart, top-actions list, security feed). Sidebar link "Observability".
+
+### 25.7 Polling live activity feed (Improvement 3.8)
+
+- `DashboardController@activityFeed(Request, Tenant)` — JSON endpoint gated by `hasPermission(Permission::AuditView)`; supports incremental polling via `?after={id}` and returns `{events:[{id,action,user,target,at,timestamp}], latest_id}`. `show()` passes `canViewFeed` to the view.
+- Route `tenant.activity-feed` (`/t/{tenant}/activity-feed`). `resources/views/dashboard.blade.php` renders a "Live activity" panel (only when `canViewFeed`) whose vanilla-JS poller hits the endpoint every 10s, prepends/highlights new events, caps the list, and shows a connection "pulse". Chosen over Laravel Reverb to avoid running a WebSocket server; upgrading to broadcasting later is straightforward.
+
+### 25.8 Acceptance checklist (delta on top of sections 19, 22, 23, 24)
+
+- [ ] `php artisan test` reports **>=158** passing tests with all section-25 files included; `vendor/bin/pint --dirty` is clean.
+- [ ] Creating any audit row mirrors a structured record to the `audit` log channel and, when an active matching sink exists, dispatches `DeliverAuditLogToSink`; the delivery is HMAC-signed when a secret is set.
+- [ ] The admin audit page expands a row into a Before/After diff and filters correctly by user and date range.
+- [ ] `audit:archive` moves rows older than the retention window to a JSONL file and prunes them; `tenants.settings.audit_retention_days = 0` disables pruning for that tenant; `--dry-run` changes nothing.
+- [ ] Destructive routes (tenant toggle, role delete, admin password set, sink delete) redirect to `password.confirm` until the password is confirmed.
+- [ ] The super-admin observability dashboard renders for super-admins and is forbidden for tenant users; the dashboard live feed returns JSON for `audit.view` holders and 403 otherwise.
