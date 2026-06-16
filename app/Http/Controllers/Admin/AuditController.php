@@ -8,6 +8,7 @@ use App\Enums\Permission as PermissionEnum;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Tenant;
+use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -28,6 +29,18 @@ class AuditController extends Controller
             $query->where('action', $action);
         }
 
+        if ($userId = $request->integer('user_id')) {
+            $query->where('user_id', $userId);
+        }
+
+        if ($from = $request->date('from')) {
+            $query->where('created_at', '>=', $from->startOfDay());
+        }
+
+        if ($to = $request->date('to')) {
+            $query->where('created_at', '<=', $to->endOfDay());
+        }
+
         $logs = $query->paginate(50)->withQueryString();
 
         $actions = AuditLog::query()
@@ -37,7 +50,12 @@ class AuditController extends Controller
             ->sort()
             ->values();
 
-        return view('admin.audit.index', compact('logs', 'tenant', 'actions'));
+        $users = User::query()
+            ->where('tenant_id', $tenant->id)
+            ->orderBy('name')
+            ->get(['id', 'name', 'email']);
+
+        return view('admin.audit.index', compact('logs', 'tenant', 'actions', 'users'));
     }
 
     public function export(Request $request, Tenant $tenant): StreamedResponse|RedirectResponse
