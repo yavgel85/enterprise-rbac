@@ -58,6 +58,7 @@ enum Permission: string
 
     case AuditView = 'audit.view';
     case AuditExport = 'audit.export';
+    case AuditManage = 'audit.manage';
 
     case ApprovalsView = 'approvals.view';
 

@@ -54,4 +54,9 @@ enum AuditAction: string
     case ApprovalStepApproved = 'approval_step_approved';
     case ApprovalStepRejected = 'approval_step_rejected';
     case ApprovalCompleted = 'approval_completed';
+
+    case AuditSinkCreated = 'audit_sink_created';
+    case AuditSinkUpdated = 'audit_sink_updated';
+    case AuditSinkDeleted = 'audit_sink_deleted';
+    case AuditArchived = 'audit_archived';
 }

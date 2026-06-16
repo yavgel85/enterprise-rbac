@@ -65,6 +65,16 @@ return [
             'replace_placeholders' => true,
         ],
 
+        // Structured audit trail (Improvement 3.3). Swap the driver/handler via
+        // env to forward to an external collector (Sentry, Datadog, syslog).
+        'audit' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/audit.log'),
+            'level' => env('AUDIT_LOG_LEVEL', 'info'),
+            'days' => env('AUDIT_LOG_DAYS', 30),
+            'replace_placeholders' => true,
+        ],
+
         'daily' => [
             'driver' => 'daily',
             'path' => storage_path('logs/laravel.log'),
