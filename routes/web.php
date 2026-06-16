@@ -3,11 +3,13 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Admin\AuditController as AdminAuditController;
+use App\Http\Controllers\Admin\AuditSinkController;
 use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\PermissionConditionController;
 use App\Http\Controllers\Admin\PermissionController as AdminPermissionController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\UserController;
+use App\Http\Controllers\Auth\ConfirmPasswordController;
 use App\Http\Controllers\Auth\EmailVerificationController;
 use App\Http\Controllers\Auth\InvitationController;
 use App\Http\Controllers\Auth\LoginController;
@@ -21,6 +23,7 @@ use App\Http\Controllers\Crm\TaskController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\SuperAdmin\AuditController as SuperAuditController;
+use App\Http\Controllers\SuperAdmin\ObservabilityController;
 use App\Http\Controllers\SuperAdmin\PermissionController as SuperPermissionController;
 use App\Http\Controllers\SuperAdmin\TenantController;
 use Illuminate\Support\Facades\Route;
@@ -59,6 +62,9 @@ Route::middleware('guest')->group(function () {
 Route::middleware('auth')->group(function () {
     Route::post('/logout', [LoginController::class, 'destroy'])->name('logout');
 
+    Route::get('/confirm-password', [ConfirmPasswordController::class, 'show'])->name('password.confirm');
+    Route::post('/confirm-password', [ConfirmPasswordController::class, 'store'])->middleware('throttle:6,1');
+
     Route::get('/email/verify', [EmailVerificationController::class, 'notice'])->name('verification.notice');
     Route::get('/email/verify/{id}/{hash}', [EmailVerificationController::class, 'verify'])
         ->middleware(['signed', 'throttle:6,1'])
@@ -80,18 +86,21 @@ Route::middleware('auth')->group(function () {
             Route::get('tenants/create', [TenantController::class, 'create'])->name('tenants.create');
             Route::post('tenants', [TenantController::class, 'store'])->name('tenants.store');
             Route::get('tenants/{tenant}', [TenantController::class, 'show'])->name('tenants.show');
-            Route::put('tenants/{tenant}/toggle', [TenantController::class, 'toggle'])->name('tenants.toggle');
+            Route::put('tenants/{tenant}/toggle', [TenantController::class, 'toggle'])->middleware('password.confirm')->name('tenants.toggle');
             Route::put('tenants/{tenant}/features/{feature}', [TenantController::class, 'toggleFeature'])->name('tenants.features.toggle');
 
             Route::get('permissions', [SuperPermissionController::class, 'index'])->name('permissions.index');
 
             Route::get('audit', [SuperAuditController::class, 'index'])->name('audit.index');
+
+            Route::get('observability', [ObservabilityController::class, 'index'])->name('observability.index');
         });
 
     Route::prefix('t/{tenant}')
         ->middleware('tenant')
         ->group(function () {
             Route::get('/', [DashboardController::class, 'show'])->name('tenant.dashboard');
+            Route::get('/activity-feed', [DashboardController::class, 'activityFeed'])->name('tenant.activity-feed');
 
             Route::prefix('admin')->name('admin.')->group(function () {
                 Route::get('users', [UserController::class, 'index'])->name('users.index');
@@ -100,7 +109,7 @@ Route::middleware('auth')->group(function () {
                 Route::put('users/{user}/roles', [UserController::class, 'syncRoles'])->name('users.roles.sync');
                 Route::post('users/{user}/roles/temporary', [UserController::class, 'grantTemporaryRole'])->name('users.roles.temporary');
                 Route::put('users/{user}/unlock', [UserController::class, 'unlock'])->name('users.unlock');
-                Route::put('users/{user}/password', [UserController::class, 'updatePassword'])->name('users.password.update');
+                Route::put('users/{user}/password', [UserController::class, 'updatePassword'])->middleware('password.confirm')->name('users.password.update');
 
                 Route::get('roles', [RoleController::class, 'index'])->name('roles.index');
                 Route::get('roles/create', [RoleController::class, 'create'])->name('roles.create');
@@ -111,7 +120,7 @@ Route::middleware('auth')->group(function () {
                 Route::put('roles/{role}/permissions', [RoleController::class, 'syncPermissions'])->name('roles.permissions.sync');
                 Route::post('roles/{role}/apply-group', [RoleController::class, 'applyGroup'])->name('roles.groups.apply');
                 Route::post('roles/{role}/clone', [RoleController::class, 'clone'])->name('roles.clone');
-                Route::delete('roles/{role}', [RoleController::class, 'destroy'])->name('roles.destroy');
+                Route::delete('roles/{role}', [RoleController::class, 'destroy'])->middleware('password.confirm')->name('roles.destroy');
 
                 Route::get('permissions', [AdminPermissionController::class, 'index'])->name('permissions.index');
                 Route::get('permissions/users/{user}', [AdminPermissionController::class, 'userEdit'])->name('permissions.user.edit');
@@ -129,6 +138,11 @@ Route::middleware('auth')->group(function () {
 
                 Route::get('audit', [AdminAuditController::class, 'index'])->name('audit.index');
                 Route::post('audit/export', [AdminAuditController::class, 'export'])->name('audit.export');
+
+                Route::get('audit-sinks', [AuditSinkController::class, 'index'])->name('audit-sinks.index');
+                Route::post('audit-sinks', [AuditSinkController::class, 'store'])->name('audit-sinks.store');
+                Route::put('audit-sinks/{auditSink}', [AuditSinkController::class, 'update'])->name('audit-sinks.update');
+                Route::delete('audit-sinks/{auditSink}', [AuditSinkController::class, 'destroy'])->middleware('password.confirm')->name('audit-sinks.destroy');
             });
 
             Route::prefix('crm')->name('crm.')->group(function () {

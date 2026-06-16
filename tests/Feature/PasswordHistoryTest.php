@@ -97,6 +97,7 @@ it('blocks admin override when the candidate password is in history', function (
     app(RecordPasswordHistory::class)->handle($sales, 'recycled-pw');
 
     $this->actingAs($admin)
+        ->withSession(['auth.password_confirmed_at' => time()])
         ->put("/t/{$tenant->slug}/admin/users/{$sales->id}/password", [
             'password' => 'recycled-pw',
             'password_confirmation' => 'recycled-pw',

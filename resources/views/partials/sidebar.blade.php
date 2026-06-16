@@ -21,6 +21,7 @@
             <a href="{{ route('super-admin.tenants.index') }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('super-admin.tenants.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Tenants</a>
             <a href="{{ route('super-admin.permissions.index') }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('super-admin.permissions.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Permissions catalog</a>
             <a href="{{ route('super-admin.audit.index') }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('super-admin.audit.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Global audit</a>
+            <a href="{{ route('super-admin.observability.index') }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('super-admin.observability.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Observability</a>
         @endif
 
         @if ($tenant)
@@ -49,7 +50,10 @@
                 <a href="{{ route('admin.permission-conditions.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.permission-conditions.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Access conditions</a>
             @endif
             <a href="{{ route('admin.departments.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.departments.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Departments</a>
-            <a href="{{ route('admin.audit.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.audit.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Audit log</a>
+            <a href="{{ route('admin.audit.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.audit.index') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Audit log</a>
+            @if ($user->hasPermission(\App\Enums\Permission::AuditManage))
+                <a href="{{ route('admin.audit-sinks.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.audit-sinks.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Audit sinks</a>
+            @endif
         @endif
     </nav>
 

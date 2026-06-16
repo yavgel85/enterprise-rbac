@@ -22,6 +22,7 @@ it('lets a tenant-admin set a sales users password', function () {
     ]);
 
     $this->actingAs($admin)
+        ->withSession(['auth.password_confirmed_at' => time()])
         ->put("/t/{$tenant->slug}/admin/users/{$sales->id}/password", [
             'password' => 'fresh-strong-pw',
             'password_confirmation' => 'fresh-strong-pw',
@@ -39,6 +40,7 @@ it('forbids a tenant-admin from changing another tenant-admins password', functi
     $peer = makeUserWithRole($tenant, 'tenant-admin', ['password' => 'old']);
 
     $this->actingAs($admin)
+        ->withSession(['auth.password_confirmed_at' => time()])
         ->put("/t/{$tenant->slug}/admin/users/{$peer->id}/password", [
             'password' => 'new-strong-pw',
             'password_confirmation' => 'new-strong-pw',
@@ -58,6 +60,7 @@ it('forbids a tenant-admin from changing a super-admins password', function () {
     ]);
 
     $this->actingAs($admin)
+        ->withSession(['auth.password_confirmed_at' => time()])
         ->put("/t/{$tenant->slug}/admin/users/{$super->id}/password", [
             'password' => 'new-strong-pw',
             'password_confirmation' => 'new-strong-pw',
@@ -74,6 +77,7 @@ it('lets a super-admin change a tenant-admins password', function () {
     $admin = makeUserWithRole($tenant, 'tenant-admin', ['password' => 'old']);
 
     $this->actingAs($super)
+        ->withSession(['auth.password_confirmed_at' => time()])
         ->put("/t/{$tenant->slug}/admin/users/{$admin->id}/password", [
             'password' => 'super-set-pw',
             'password_confirmation' => 'super-set-pw',
@@ -89,6 +93,7 @@ it('refuses to let an admin reset their own password through the admin form', fu
     $admin = makeUserWithRole($tenant, 'tenant-admin', ['password' => 'old']);
 
     $this->actingAs($admin)
+        ->withSession(['auth.password_confirmed_at' => time()])
         ->put("/t/{$tenant->slug}/admin/users/{$admin->id}/password", [
             'password' => 'self-pw',
             'password_confirmation' => 'self-pw',
@@ -102,6 +107,7 @@ it('rejects a manager without users.set-password permission', function () {
     $target = makeUserWithRole($tenant, 'sales', ['password' => 'old']);
 
     $this->actingAs($manager)
+        ->withSession(['auth.password_confirmed_at' => time()])
         ->put("/t/{$tenant->slug}/admin/users/{$target->id}/password", [
             'password' => 'new-pw',
             'password_confirmation' => 'new-pw',
