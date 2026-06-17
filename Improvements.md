@@ -314,7 +314,7 @@ Cron `audit:archive` ежедневно перемещает записи `creat
 
 > **Реализовано.** Docker-окружение переключает `CACHE_STORE`/`SESSION_DRIVER`/`QUEUE_CONNECTION` на `redis` (контейнер `redis:7`, расширение `phpredis` собрано в образе). Resolver (`ResolveUserPermissions`) кэширует через стандартный `cache()`-репозиторий, поэтому работает с любым стором без изменений. Добавлена команда `php artisan rbac:warm-cache {--tenant=}` — заранее резолвит и кэширует права всех активных не-super-admin пользователей (прогрев после деплоя/сброса кэша). Локально вне Docker по-умолчанию остаётся `database`-стор (Herd/тесты не затронуты). Pest: `tests/Feature/RbacMaintenanceTest.php`.
 
-### 4.2 Queue worker для тяжёлых задач 🟡 (P1, M) — _Инфраструктура сделана_
+### 4.2 Queue worker для тяжёлых задач ✅ (P1, M) — _Сделано_
 
 Перевести в очередь:
 - **Audit export** (CSV stream работает синхронно, для >100k записей задушит запрос). Сделать `ExportAuditLog` job → пишет в storage и шлёт email со ссылкой.
@@ -324,26 +324,41 @@ Cron `audit:archive` ежедневно перемещает записи `creat
 
 Добавить supervised worker через `php artisan queue:work` + healthcheck в Docker.
 
-> **Реализовано частично (инфраструктура).** В compose добавлены отдельные контейнеры `queue` (`php artisan queue:work --tries=3 --timeout=90`, с liveness-healthcheck `pgrep -f queue:work`) и `scheduler` (`php artisan schedule:work`). Существующий `DeliverAuditLogToSink` уже выполняется через очередь и обрабатывается воркером. Перевод конкретных задач (`ExportAuditLog`, invite email, bulk import) в job-ы — отдельная прикладная работа, отложена.
+> **Реализовано.** Инфраструктура: в compose отдельные контейнеры `queue` (`php artisan queue:work --tries=3 --timeout=90`, liveness-healthcheck `pgrep -f queue:work`) и `scheduler` (`php artisan schedule:work`). Прикладные задачи переведены в очередь:
+> - **Audit export** → синхронный stream заменён на job `App\Jobs\ExportAuditLog` (ShouldQueue): пишет CSV на диск `local` в `audit-exports/{tenant}/…`, затем шлёт `App\Notifications\AuditExportReady` (тоже queued) с **подписанной** ссылкой на скачивание (route `admin.audit.export.download`, middleware `signed`, живёт 3 дня, скачивание дополнительно гейтится правом `audit.export`). Контроллер теперь сразу возвращает flash «export queued».
+> - **InviteUser** → отправка письма приглашения вынесена в on-demand queued-нотификацию `App\Notifications\InvitationNotification` (приглашаемый ещё не User).
+> - **Webhook delivery** (`DeliverAuditLogToSink`) уже выполнялся через очередь.
+> - Bulk import — вместе с фичей импорта (5.4), пока не реализован.
+>
+> Pest: `tests/Feature/AuditExportTest.php` (job пишет файл + шлёт нотификацию, подписанная ссылка скачивается, неподписанная — 403), `tests/Feature/InvitationFlowTest.php` (нотификация уходит), `tests/Feature/FeatureFlagTest.php` (export ставится в очередь).
 
-### 4.3 N+1 query audit (P1, S)
+### 4.3 N+1 query audit ✅ (P1, S) — _Сделано_
 
 Pre-deploy запускать `barryvdh/laravel-debugbar` в dev и фиксировать N+1. В `tests/` использовать `assertQueryCount` или `Laravel\Pulse::record`. Особенно проверить:
 - `admin/users/index` (eager load roles+department — уже есть)
 - `dashboard` recent deals (уже eager)
 - `admin/audit/index` (user уже eager)
 
+> **Реализовано.** `barryvdh/laravel-debugbar` добавлен в `require-dev` (автоматически активен в `local`, выключен в `testing`/`production`) — даёт счётчик запросов и таймлайн для ручного аудита перед деплоем. Регрессии зафиксированы тестами `tests/Feature/QueryPerformanceTest.php`: счётчик запросов на `admin/users/index`, `dashboard` и `admin/audit/index` замеряется через `DB::getQueryLog()` при нескольких связанных строках и проверяется на верхнюю границу — если eager-loading сломается и число запросов начнёт расти линейно, тест упадёт. Проверено, что списки уже грузят связи (`users` → `roles`+`department`, dashboard-deals и audit → `user`).
+
 ### 4.4 Read replicas (P2, L)
 
 `database.connections.sqlite_replica` (или mysql). `audit_logs.index` идёт в replica. Большая выгода при >1M записей.
 
-### 4.5 Database indexes review (P1, S)
+### 4.5 Database indexes review ✅ (P1, S) — _Сделано_
 
 Аудит-проверка слабых индексов:
 - `permission_user.expires_at` — есть, но при resolve мы фильтруем по `(user_id, expires_at, type)` — добавить composite.
 - `role_user.expires_at` — то же самое.
 - `companies/contacts/deals (tenant_id, owner_id, status)` — есть, но для CRM-фильтров (`(tenant_id, stage, status)` для воронки) добавить ещё пары.
 - Полнотекстовый индекс на `companies.name, contacts.first/last_name` если перейдёте на MySQL.
+
+> **Реализовано.** Миграция `2026_06_17_120000_add_performance_indexes` добавляет составные индексы:
+> - `permission_user (user_id, type, expires_at)` — покрывает весь предикат резолва прямых прав одним индексом;
+> - `role_user (user_id, expires_at)` — фильтр активных ролей по сроку;
+> - `deals (tenant_id, stage, status)` — воронка/pipeline-фильтры.
+>
+> Индексы кросс-СУБД (работают на SQLite и MySQL). **Полнотекстовый индекс намеренно не добавлен** — он несовместим с SQLite (на нём гоняются тесты) и нужен только под полнотекстовый поиск (8.3), которого пока нет; добавится вместе с поиском.
 
 ### 4.6 Horizontal scaling readiness ✅ (P2, M) — _Сделано_
 
@@ -355,9 +370,11 @@ Pre-deploy запускать `barryvdh/laravel-debugbar` в dev и фиксир
 
 > **Реализовано.** Docker-окружение демонстрирует stateless-готовность: session/cache/queue вынесены в Redis, состояние не хранится в инстансе приложения (app-контейнеры взаимозаменяемы, sticky-session не нужен), очередь и планировщик — отдельные процессы. Health-check `/up` уже присутствует и используется. Для прод-масштабирования достаточно поднять несколько реплик `app`/`queue` за балансировщиком.
 
-### 4.7 Tenant-aware caching keys (P2, S)
+### 4.7 Tenant-aware caching keys ✅ (P2, S) — _Сделано_
 
 Все cache keys должны префиксироваться tenant_id. Сейчас `rbac:tenant:{id}:user:{id}:permissions` — корректно. Для других кэшей (например, list of companies) — внедрить хелпер `tenantCacheKey('companies.list')`.
+
+> **Реализовано.** Добавлен глобальный хелпер `tenant_cache_key('companies.list')` (плюс camelCase-алиас `tenantCacheKey()`) в `app/Support/helpers.php` (подключён через `composer.json` → `autoload.files`). Он строит ключ вида `tenant:{id}:{suffix}`, резолвя tenant из request-`Context` (ставится `ResolveTenant`-middleware) с фолбэком на `auth()->user()->tenant_id`; для console/queue-контекста можно передать id явно. Применён как пример к кэшу выпадающего списка действий на `admin/audit/index` (`tenant_cache_key('audit.actions')`, TTL 5 мин) — убирает `DISTINCT`-скан по `audit_logs` на каждый просмотр. RBAC-ключ резолвера прав уже был корректно tenant-scoped. Pest: `tests/Unit/TenantCacheKeyTest.php`.
 
 ### 4.8 Scheduled cache cleanup ✅ (P2, S) — _Сделано_
 
@@ -777,8 +794,8 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 1.8 | Security headers ✅ | P1 | S | 1 |
 | 1.9 | Force HTTPS ✅ | P0 | S | 1 |
 | 4.1 | Redis cache ✅ | P0 | S | 1 |
-| 4.2 | Queue worker 🟡 | P1 | M | 2 |
-| 4.5 | DB indexes review | P1 | S | 1 |
+| 4.2 | Queue worker ✅ | P1 | M | 2 |
+| 4.5 | DB indexes review ✅ | P1 | S | 1 |
 | 5.7 | File attachments | P0 | M | 2 |
 | 5.3 | Custom fields (EAV) | P0 | L | 3 |
 | 6.1 | Email notifications | P0 | M | 1 |
@@ -835,10 +852,10 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 3.3 | Sentry/Datadog ✅ | P1 | S | 2 |
 | 3.5 | Per-tenant audit sinks ✅ | P2 | M | 3 |
 | 3.8 | Real-time activity feed ✅ | P2 | M | 3 |
-| 4.3 | N+1 audit | P1 | S | 1 |
+| 4.3 | N+1 audit ✅ | P1 | S | 1 |
 | 4.4 | Read replicas | P2 | L | 4 |
 | 4.6 | Horizontal scaling ✅ | P2 | M | 3 |
-| 4.7 | Cache key tenancy | P2 | S | 2 |
+| 4.7 | Cache key tenancy ✅ | P2 | S | 2 |
 | 4.8 | Cache cleanup cron ✅ | P2 | S | 2 |
 | 5.8 | Recurring tasks | P2 | M | 3 |
 | 5.9 | Task dependencies | P2 | M | 3 |

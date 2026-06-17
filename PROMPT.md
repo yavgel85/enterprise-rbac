@@ -1473,3 +1473,38 @@ This wave containerises the project for one-command onboarding and adds two RBAC
 - [ ] `docker compose run --rm test` runs the whole Pest suite on in-memory SQLite (no MySQL/Redis needed) and passes.
 - [ ] `docker compose --profile dev up -d vite` serves Vite on `5173`, writes a `public/hot` pointing at `http://localhost:5173`, and `/@vite/client` returns 200.
 - [ ] Non-Docker (Herd/SQLite) behaviour and the test suite are unchanged.
+
+## 27. Application performance wave (Improvements 4.2 app jobs, 4.3, 4.5, 4.7)
+
+This wave moves the remaining heavy work off the request cycle, adds query indexes, an N+1 regression guard, and a tenant-aware cache-key helper. Everything stays SQLite-compatible (the test suite must keep passing on in-memory SQLite).
+
+### 27.1 Heavy tasks → queue (Improvement 4.2 app layer)
+
+- `app/Jobs/ExportAuditLog` (`ShouldQueue`, `timeout=600`, `tries=3`): constructor `(int $tenantId, int $requestedById, array $filters = [])`. `handle()` loads tenant + requester `withoutGlobalScopes()`, streams the (optionally filtered: action/user_id/from/to) audit rows via `lazyById()` into a CSV written with `fputcsv` to `Storage::disk('local')->path("audit-exports/{tenantId}/audit-{slug}-{Ymd-His}.csv")` (so it never buffers in memory), then `$requester->notify(new AuditExportReady($tenant, $filename))`.
+- `app/Notifications/AuditExportReady` (`ShouldQueue`, mail): builds a `URL::temporarySignedRoute('admin.audit.export.download', now()->addDays(3), [tenant, filename])` and emails a "Download CSV" button.
+- `AuditController::export` no longer streams; it `ExportAuditLog::dispatch(...)` with the current request filters and returns `back()->with('status', …queued…)`. New `AuditController::download(Request, Tenant, string $filename)` returns 403 unless `audit.export`, 404 on path-traversal (`$filename !== basename($filename)`) or missing file, else `Storage::disk('local')->download($path)`.
+- Route: `GET admin/audit/export/{filename}` → `download`, name `admin.audit.export.download`, middleware `signed` (inside the existing `auth`+`tenant`+`admin` groups, so it also requires a logged-in session).
+- `app/Notifications/InvitationNotification` (`ShouldQueue`, mail): on-demand notification (the invitee is not a `User` yet). `InviteUser` action sends it via `Notification::route('mail', $email)->notify(new InvitationNotification($tenant->name, $invitation->token, $actor->name))` after auditing — the controller response no longer blocks on mail.
+- `DeliverAuditLogToSink` (webhooks) was already queued.
+
+### 27.2 N+1 regression guard (Improvement 4.3)
+
+- `barryvdh/laravel-debugbar` added to `require-dev` (active in `local`, off in `testing`/`production`) for manual pre-deploy auditing.
+- `tests/Feature/QueryPerformanceTest.php`: a `countQueries(Closure)` helper toggles `DB::enableQueryLog()` and counts; each of `admin/users/index`, `tenant.dashboard`, `admin/audit/index` is hit with several related rows and asserted under a fixed query ceiling so any eager-loading regression fails the build.
+
+### 27.3 Composite indexes (Improvement 4.5)
+
+- Migration `2026_06_17_120000_add_performance_indexes` (named indexes, with `down()`): `permission_user (user_id, type, expires_at)`, `role_user (user_id, expires_at)`, `deals (tenant_id, stage, status)`. Cross-engine (SQLite + MySQL). No fulltext index (incompatible with SQLite; deferred until the search feature 8.3 exists).
+
+### 27.4 Tenant-aware cache keys (Improvement 4.7)
+
+- `app/Support/helpers.php` (autoloaded via `composer.json` `autoload.files`): `tenant_cache_key(string $suffix, ?int $tenantId = null): string` → `"tenant:{id}:{suffix}"`, resolving the tenant from `Context::get('tenant_id')` with fallback to `auth()->user()?->tenant_id` and a `none` marker; plus a camelCase alias `tenantCacheKey()`. Demonstrated in `AuditController::index`, which now caches the distinct-actions filter dropdown for 5 minutes under `tenant_cache_key('audit.actions', $tenant->id)`.
+- `tests/Unit/TenantCacheKeyTest.php` covers context resolution, explicit id, the `none` fallback and the alias.
+
+### 27.5 Acceptance checklist (delta)
+
+- [ ] `php artisan test` reports **>=172** passing; `vendor/bin/pint --dirty` clean.
+- [ ] Audit export returns a redirect+flash and pushes `ExportAuditLog`; the job writes a CSV under `audit-exports/{tenant}` and sends `AuditExportReady`; the signed link downloads, an unsigned/forged link is rejected.
+- [ ] Inviting a user queues `InvitationNotification` to the invitee email.
+- [ ] The three indexed tables show the new composite indexes after `migrate`; the SQLite suite still passes.
+- [ ] `tenant_cache_key()` namespaces by tenant; the audit-actions dropdown is cached per-tenant.

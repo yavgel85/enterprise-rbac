@@ -22,7 +22,7 @@
 ### Аутентификация и онбординг
 
 - **Sign-in** по email/паролю с rate-limiting (`throttle:6,1`).
-- **Invite-only регистрация**: tenant-admin приглашает пользователя с заранее выбранной ролью и опциональным department; токен инвайта живёт 7 дней (конфигурируется в `config/rbac.php`).
+- **Invite-only регистрация**: tenant-admin приглашает пользователя с заранее выбранной ролью и опциональным department; токен инвайта живёт 7 дней (конфигурируется в `config/rbac.php`). Письмо-приглашение отправляется через очередь (queued-нотификация), поэтому контроллер не блокируется на доставке почты.
 - **Авто-редирект после логина**: super-admin попадает в платформенную консоль, обычный пользователь — на дашборд своего тенанта.
 - **Password reset by email** — `/forgot-password` → ссылка с одноразовым токеном (TTL 60 мин). Защита от user enumeration (одинаковый ответ для известных и неизвестных email), throttle 5/min, аудит `password_reset_requested` / `password_reset_completed`. После сброса все сессии пользователя инвалидируются.
 - **Email verification (soft mode)** — `User implements MustVerifyEmail`. После логина баннер «Подтвердите email», кнопка _Resend_. Invite/seeders проставляют `email_verified_at = now()` сразу. Аудит `email_verification_sent` / `email_verified`.
@@ -80,7 +80,7 @@
 - Записываются также `RolesAssigned`, `PermissionGranted`, `InvitationSent`, `DealApproved`, `TaskCompleted` и др.
 - Контекст: tenant_id, user_id, ip_address, user_agent, url.
 - Tenant-admin видит audit своего тенанта, super-admin — global audit с фильтрами по тенанту и по action.
-- CSV-export аудита (за feature-flag `audit_export`).
+- **CSV-export аудита** (за feature-flag `audit_export`) — асинхронный: запрос ставит в очередь job `ExportAuditLog`, который пишет CSV на диск и присылает на email **подписанную** ссылку на скачивание (живёт 3 дня, скачивание гейтится правом `audit.export`). Требует запущенного `queue:work`.
 - **Diff-просмотр и фильтры** — строки аудита раскрываются в side-by-side diff (`Field / Before / After` + metadata), фильтрация по пользователю и диапазону дат (`from`/`to`).
 - **Структурированный канал** — каждая запись зеркалится в Monolog-канал `audit` (см. `config/audit.php` → `log_channel`), который можно перенаправить во внешний коллектор (Sentry/Datadog/OpenTelemetry/rsyslog) без изменения кода.
 - **Per-tenant audit sinks** — таблица `audit_sinks` + UI `Admin → Audit sinks` (право `audit.manage`): tenant-admin настраивает webhook, на который queued-job `DeliverAuditLogToSink` шлёт подписанные (`X-Audit-Signature: sha256=hmac`) события в реальном времени; можно ограничить набором действий.
@@ -447,7 +447,7 @@ php artisan serve
 6. **Deal lifecycle** — `sales@acme.test` создаёт deal (draft) → редактирует → manager переключает на `proposal` → manager нажимает Approve (рабочее время) → deal стал `won/closed`. Try approve в субботу — 403.
 7. **Invite flow** — `admin@acme.test` → Users → Invite (email + sales role). Откройте invitation link в инкогнито, примите → автологин в acme.
 8. **Audit** — после любого действия выше посмотрите `Admin → Audit log` (фильтры по action), а super-admin видит глобальный лог с фильтром по тенанту.
-9. **Feature flag** — у acme audit_export **включён**, у globex **выключен**. `admin@globex.test` нажимает Export CSV → flash error. Super-admin включает фичу в `/super-admin/tenants/globex` — экспорт работает.
+9. **Feature flag + async export** — у acme audit_export **включён**, у globex **выключен**. `admin@globex.test` нажимает Export CSV → flash error. Super-admin включает фичу в `/super-admin/tenants/globex`; теперь Export CSV ставит задачу в очередь (flash «queued»). При запущенном `queue:work` job `ExportAuditLog` пишет CSV в `storage/app/audit-exports/{tenant}/…` и шлёт письмо со ссылкой (в логе/Mailpit) — ссылка подписана и качает файл.
 10. **TTL role** — `temp@acme.test` имеет sales только 7 дней. Сделайте `Carbon::setTestNow(now()->addDays(10))` в tinker или вручную поменяйте `expires_at` в БД — пользователь потеряет permissions.
 11. **Inactive user / tenant** — заглушите пользователя (`is_active=false`) или тенанта — все запросы вернут 403 с понятным reason из `TenantAuthorizer`.
 12. **Password reset** — `/forgot-password` → введите `sales@acme.test`. Письмо отправится в `storage/logs/laravel.log` (mailer `log`). Найдите ссылку `/reset-password/{token}?email=...`, откройте — установите новый пароль ≥8 символов. Все сессии пользователя сброшены, в audit `password_reset_requested` + `password_reset_completed`.
@@ -545,6 +545,10 @@ php artisan rbac:warm-cache
 
 # удалить просроченные выдачи ролей/прав и сбросить кэш владельцев (--dry-run)
 php artisan rbac:prune-expired
+
+# воркер очереди — нужен для асинхронных задач (audit export, письма-приглашения, webhook-sinks)
+# вне Docker:
+php artisan queue:work --tries=3 --timeout=90
 
 # список всех роутов
 php artisan route:list
