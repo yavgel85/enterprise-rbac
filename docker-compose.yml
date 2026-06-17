@@ -1,0 +1,228 @@
+# Local development stack for Enterprise RBAC CRM.
+# One command onboarding:  docker compose up -d --build
+#
+# Services: app (php-fpm) · nginx · mysql 8 · redis · mailpit · queue worker · scheduler.
+# Meilisearch is intentionally omitted — the app ships no full-text search feature yet.
+
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: enterprise-rbac-app
+  restart: unless-stopped
+  working_dir: /var/www/html
+  volumes:
+    - ./:/var/www/html
+  networks:
+    - erbac
+
+x-app-env: &app-env
+  APP_ENV: local
+  APP_DEBUG: "true"
+  APP_URL: http://localhost:8080
+  LOG_CHANNEL: stack
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_DATABASE: enterprise_rbac
+  DB_USERNAME: erbac
+  DB_PASSWORD: secret
+  CACHE_STORE: redis
+  SESSION_DRIVER: redis
+  QUEUE_CONNECTION: redis
+  REDIS_CLIENT: phpredis
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  MAIL_MAILER: smtp
+  MAIL_HOST: mailpit
+  MAIL_PORT: "1025"
+  MAIL_FROM_ADDRESS: crm@enterprise-rbac.test
+  MAIL_FROM_NAME: "Enterprise RBAC"
+
+services:
+  app:
+    <<: *app-image
+    container_name: erbac-app
+    # node_modules is kept in a container-local volume so the host's macOS
+    # binaries (Herd) never clash with the Linux ones built here.
+    volumes:
+      - ./:/var/www/html
+      - erbac-node-modules:/var/www/html/node_modules
+    environment:
+      <<: *app-env
+      CONTAINER_ROLE: app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: erbac-nginx
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./:/var/www/html:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+    networks:
+      - erbac
+
+  mysql:
+    image: mysql:8.0
+    container_name: erbac-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: enterprise_rbac
+      MYSQL_USER: erbac
+      MYSQL_PASSWORD: secret
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - erbac-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - erbac
+
+  redis:
+    image: redis:7-alpine
+    container_name: erbac-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - erbac-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - erbac
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: erbac-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025" # web UI
+      - "1025:1025" # SMTP
+    networks:
+      - erbac
+
+  # Universal web DB client → http://localhost:3000
+  # One UI for both MySQL and Redis; connections are pre-seeded via env.
+  dbgate:
+    image: dbgate/dbgate:latest
+    container_name: erbac-dbgate
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - erbac-dbgate:/root/.dbgate
+    environment:
+      CONNECTIONS: mysql,redis
+      LABEL_mysql: MySQL (enterprise_rbac)
+      SERVER_mysql: mysql
+      PORT_mysql: "3306"
+      USER_mysql: erbac
+      PASSWORD_mysql: secret
+      ENGINE_mysql: mysql@dbgate-plugin-mysql
+      LABEL_redis: Redis
+      SERVER_redis: redis
+      PORT_redis: "6379"
+      ENGINE_redis: redis@dbgate-plugin-redis
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - erbac
+
+  queue:
+    <<: *app-image
+    container_name: erbac-queue
+    environment:
+      <<: *app-env
+      CONTAINER_ROLE: queue
+    depends_on:
+      app:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'queue:work' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  scheduler:
+    <<: *app-image
+    container_name: erbac-scheduler
+    environment:
+      <<: *app-env
+      CONTAINER_ROLE: scheduler
+    depends_on:
+      app:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Vite dev server with HMR — opt-in via the `dev` profile:
+  #   docker compose --profile dev up -d vite
+  # Writes public/hot so Blade @vite switches to live reload.
+  vite:
+    <<: *app-image
+    container_name: erbac-vite
+    profiles: ["dev"]
+    volumes:
+      - ./:/var/www/html
+      - erbac-node-modules:/var/www/html/node_modules
+    entrypoint: ["sh", "-lc", "until [ -x node_modules/.bin/vite ]; do echo 'waiting for node_modules...'; sleep 3; done; exec npm run dev -- --host"]
+    environment:
+      VITE_DOCKER: "true"
+    ports:
+      - "5173:5173"
+
+  # One-off test runner — isolated from the app's MySQL/Redis env so the suite
+  # always runs on in-memory SQLite. Does NOT start with `up` (tools profile):
+  #   docker compose run --rm test                 # full suite
+  #   docker compose run --rm test --filter=Rbac   # pass args through
+  test:
+    <<: *app-image
+    container_name: erbac-test
+    profiles: ["tools"]
+    restart: "no"
+    entrypoint: ["php", "artisan", "test"]
+    environment:
+      APP_ENV: testing
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ":memory:"
+      CACHE_STORE: array
+      SESSION_DRIVER: array
+      QUEUE_CONNECTION: sync
+      MAIL_MAILER: array
+      BCRYPT_ROUNDS: "4"
+
+volumes:
+  erbac-mysql:
+  erbac-redis:
+  erbac-node-modules:
+  erbac-dbgate:
+
+networks:
+  erbac:
+    driver: bridge
