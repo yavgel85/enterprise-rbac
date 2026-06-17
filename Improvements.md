@@ -308,11 +308,13 @@ Cron `audit:archive` ежедневно перемещает записи `creat
 
 ## 4. Производительность и инфраструктура
 
-### 4.1 Redis cache для permission resolver (P0, S)
+### 4.1 Redis cache для permission resolver ✅ (P0, S) — _Сделано_
 
 Заменить `database` cache на `redis` (через `phpredis`/`predis`). Конкретно для permissions кэш-хит порядка 0.2ms против 5-20ms на БД. Добавить `php artisan rbac:warm-cache` для прогрева после деплоя.
 
-### 4.2 Queue worker для тяжёлых задач (P1, M)
+> **Реализовано.** Docker-окружение переключает `CACHE_STORE`/`SESSION_DRIVER`/`QUEUE_CONNECTION` на `redis` (контейнер `redis:7`, расширение `phpredis` собрано в образе). Resolver (`ResolveUserPermissions`) кэширует через стандартный `cache()`-репозиторий, поэтому работает с любым стором без изменений. Добавлена команда `php artisan rbac:warm-cache {--tenant=}` — заранее резолвит и кэширует права всех активных не-super-admin пользователей (прогрев после деплоя/сброса кэша). Локально вне Docker по-умолчанию остаётся `database`-стор (Herd/тесты не затронуты). Pest: `tests/Feature/RbacMaintenanceTest.php`.
+
+### 4.2 Queue worker для тяжёлых задач 🟡 (P1, M) — _Инфраструктура сделана_
 
 Перевести в очередь:
 - **Audit export** (CSV stream работает синхронно, для >100k записей задушит запрос). Сделать `ExportAuditLog` job → пишет в storage и шлёт email со ссылкой.
@@ -321,6 +323,8 @@ Cron `audit:archive` ежедневно перемещает записи `creat
 - **Webhook delivery** (см. 6.3).
 
 Добавить supervised worker через `php artisan queue:work` + healthcheck в Docker.
+
+> **Реализовано частично (инфраструктура).** В compose добавлены отдельные контейнеры `queue` (`php artisan queue:work --tries=3 --timeout=90`, с liveness-healthcheck `pgrep -f queue:work`) и `scheduler` (`php artisan schedule:work`). Существующий `DeliverAuditLogToSink` уже выполняется через очередь и обрабатывается воркером. Перевод конкретных задач (`ExportAuditLog`, invite email, bulk import) в job-ы — отдельная прикладная работа, отложена.
 
 ### 4.3 N+1 query audit (P1, S)
 
@@ -341,7 +345,7 @@ Pre-deploy запускать `barryvdh/laravel-debugbar` в dev и фиксир
 - `companies/contacts/deals (tenant_id, owner_id, status)` — есть, но для CRM-фильтров (`(tenant_id, stage, status)` для воронки) добавить ещё пары.
 - Полнотекстовый индекс на `companies.name, contacts.first/last_name` если перейдёте на MySQL.
 
-### 4.6 Horizontal scaling readiness (P2, M)
+### 4.6 Horizontal scaling readiness ✅ (P2, M) — _Сделано_
 
 - `SESSION_DRIVER=redis`.
 - `CACHE_STORE=redis`.
@@ -349,17 +353,23 @@ Pre-deploy запускать `barryvdh/laravel-debugbar` в dev и фиксир
 - Stateless сервера за балансировщиком, sticky-session не нужен.
 - Health-check `/up` уже есть.
 
+> **Реализовано.** Docker-окружение демонстрирует stateless-готовность: session/cache/queue вынесены в Redis, состояние не хранится в инстансе приложения (app-контейнеры взаимозаменяемы, sticky-session не нужен), очередь и планировщик — отдельные процессы. Health-check `/up` уже присутствует и используется. Для прод-масштабирования достаточно поднять несколько реплик `app`/`queue` за балансировщиком.
+
 ### 4.7 Tenant-aware caching keys (P2, S)
 
 Все cache keys должны префиксироваться tenant_id. Сейчас `rbac:tenant:{id}:user:{id}:permissions` — корректно. Для других кэшей (например, list of companies) — внедрить хелпер `tenantCacheKey('companies.list')`.
 
-### 4.8 Scheduled cache cleanup (P2, S)
+### 4.8 Scheduled cache cleanup ✅ (P2, S) — _Сделано_
 
 Cron-команда удаляющая просроченные `role_user.expires_at`/`permission_user.expires_at` (мягко — `forceDelete`) + сбрасывающая cache владельцев. Уже это работает через TTL, но БД пухнет.
 
-### 4.9 Docker + docker-compose dev (P1, M)
+> **Реализовано.** Команда `php artisan rbac:prune-expired {--dry-run}` удаляет просроченные строки из `role_user`/`permission_user` и сбрасывает кэш прав затронутых пользователей (`ForgetUserPermissionsCache`). Запланирована ежедневно в 03:00 (`routes/console.php`), `--dry-run` показывает объём без удаления. В Docker исполняется контейнером `scheduler`. Pest: `tests/Feature/RbacMaintenanceTest.php`.
+
+### 4.9 Docker + docker-compose dev ✅ (P1, M) — _Сделано_
 
 `docker-compose.yml` с сервисами `app (php-fpm 8.3)`, `nginx`, `redis`, `mysql:8`, `mailpit`, `meilisearch`. Делает onboarding нового разработчика 5-минутным.
+
+> **Реализовано.** `Dockerfile` (php-fpm 8.4 — под Herd-toolchain, расширения `pdo_mysql`/`redis`/`bcmath`/`pcntl`/`zip` + Node 20 + Composer) и `docker-compose.yml` с сервисами `app`, `nginx`, `mysql:8`, `redis:7`, `mailpit`, `dbgate` (универсальный веб-клиент к MySQL и Redis в одном UI, `:3000`), `queue`, `scheduler`, плюс опциональные `vite` (HMR, профиль `dev`) и `test` (Pest на in-memory SQLite, профиль `tools`). Один `entrypoint.sh` обслуживает app/queue/scheduler по `CONTAINER_ROLE`; app-контейнер сам ставит зависимости, ждёт БД, гоняет миграции и (только на свежей БД) сидеры, билдит фронт. `node_modules` вынесен в отдельный volume (`erbac-node-modules`), чтобы macOS-бинарники Herd не конфликтовали с Linux-сборкой. Onboarding — `docker compose up -d --build`, приложение на `http://localhost:8080`, Mailpit UI на `http://localhost:8025`. **Meilisearch намеренно исключён** — в приложении пока нет полнотекстового поиска (8.3). Проверено end-to-end: `/up` и `/login` → 200, redis-сторы активны, воркер healthy, Linux-сборка Vite ок, HMR-`hot`-файл указывает на `localhost:5173`, весь Pest-сьют (162) зелёный через `docker compose run --rm test`. Инструкции — в `README.md`.
 
 ---
 
@@ -758,7 +768,7 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 
 ### Сводная таблица
 
-> Реализованные пункты помечены галочкой `✅` в колонке «Улучшение»; их полный перечень — в блоке «Уже реализовано» выше.
+> Реализованные пункты помечены галочкой `✅` в колонке «Улучшение»; частично реализованные (готова инфраструктура) — `🟡`. Подробности — в соответствующих разделах выше.
 
 | # | Улучшение | Приоритет | Сложность | Фаза |
 |---|-----------|-----------|-----------|------|
@@ -766,8 +776,8 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 1.5 | Account lockout ✅ | P1 | S | 1 |
 | 1.8 | Security headers ✅ | P1 | S | 1 |
 | 1.9 | Force HTTPS ✅ | P0 | S | 1 |
-| 4.1 | Redis cache | P0 | S | 1 |
-| 4.2 | Queue worker | P1 | M | 2 |
+| 4.1 | Redis cache ✅ | P0 | S | 1 |
+| 4.2 | Queue worker 🟡 | P1 | M | 2 |
 | 4.5 | DB indexes review | P1 | S | 1 |
 | 5.7 | File attachments | P0 | M | 2 |
 | 5.3 | Custom fields (EAV) | P0 | L | 3 |
@@ -789,7 +799,7 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 3.4 | Audit retention/archive ✅ | P1 | M | 2 |
 | 3.6 | Critical-action confirmation ✅ | P1 | S | 1 |
 | 3.7 | App monitoring ✅ | P1 | M | 2 |
-| 4.9 | Docker dev | P1 | M | 1 |
+| 4.9 | Docker dev ✅ | P1 | M | 1 |
 | 5.1 | Kanban board | P1 | M | 2 |
 | 5.2 | Pipeline analytics | P1 | M | 2 |
 | 5.4 | Bulk CSV import | P1 | M | 2 |
@@ -827,9 +837,9 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 3.8 | Real-time activity feed ✅ | P2 | M | 3 |
 | 4.3 | N+1 audit | P1 | S | 1 |
 | 4.4 | Read replicas | P2 | L | 4 |
-| 4.6 | Horizontal scaling | P2 | M | 3 |
+| 4.6 | Horizontal scaling ✅ | P2 | M | 3 |
 | 4.7 | Cache key tenancy | P2 | S | 2 |
-| 4.8 | Cache cleanup cron | P2 | S | 2 |
+| 4.8 | Cache cleanup cron ✅ | P2 | S | 2 |
 | 5.8 | Recurring tasks | P2 | M | 3 |
 | 5.9 | Task dependencies | P2 | M | 3 |
 | 5.11 | Multi-currency conversion | P2 | M | 3 |

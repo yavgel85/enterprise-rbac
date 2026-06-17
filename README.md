@@ -8,6 +8,7 @@
 - [Стек](#стек)
 - [Архитектура](#архитектура)
 - [Установка с нуля](#установка-с-нуля)
+- [Запуск в Docker](#запуск-в-docker)
 - [Запуск](#запуск)
 - [Роли и разрешения](#роли-и-разрешения)
 - [Демо-пользователи](#демо-пользователи)
@@ -99,11 +100,12 @@
 | Слой | Технология |
 |------|-----------|
 | Backend | PHP 8.3+, Laravel 13 |
-| База данных | SQLite (dev) — все миграции совместимы с MySQL/Postgres |
-| Кэш | `database` driver (можно заменить на redis) |
+| База данных | SQLite (dev/Herd) · MySQL 8 (Docker) — все миграции совместимы с MySQL/Postgres |
+| Кэш / сессии / очередь | `database` driver (Herd) · Redis 7 (Docker) |
 | Фронтенд | Blade + Tailwind CSS 4 (Vite) |
 | Тесты | Pest 4 + LazilyRefreshDatabase |
 | Форматтер | Laravel Pint |
+| Контейнеризация | Docker + docker-compose (app/nginx/mysql/redis/mailpit/queue/scheduler) |
 
 ## Архитектура
 
@@ -218,7 +220,93 @@ AUDIT_SINK_TIMEOUT=5                  # таймаут доставки, сек
 AUDIT_SINK_TRIES=3                    # число попыток queued-job доставки
 ```
 
+## Запуск в Docker
+
+Полностью контейнеризованное dev-окружение для онбординга «в одну команду». Требуется только **Docker Desktop / Docker Engine** с плагином Compose v2+ — PHP, Node, Composer и БД ставить локально не нужно.
+
+### Состав стека (`docker-compose.yml`)
+
+| Сервис | Образ | Порт (host) | Назначение |
+|--------|-------|-------------|------------|
+| `app` | свой `Dockerfile` (php-fpm 8.4 + Node 20 + Composer) | — (fpm :9000) | PHP-приложение, миграции, сидинг, сборка фронта |
+| `nginx` | `nginx:1.27-alpine` | **8080** | Веб-сервер, проксирует на `app:9000` |
+| `mysql` | `mysql:8.0` | 3306 | Основная БД (`enterprise_rbac`) |
+| `redis` | `redis:7-alpine` | 6379 | Cache + session + queue |
+| `mailpit` | `axllent/mailpit` | **8025** (UI), 1025 (SMTP) | Перехват исходящей почты |
+| `dbgate` | `dbgate/dbgate` | **3000** | Универсальный веб-клиент: MySQL **и** Redis в одном UI |
+| `queue` | тот же образ `app` | — | Supervised-воркер `queue:work` (+ liveness healthcheck) |
+| `scheduler` | тот же образ `app` | — | `schedule:work` (audit:archive, rbac:prune-expired) |
+| `vite` | тот же образ `app` | **5173** | Vite dev-сервер с HMR. Профиль `dev` (вручную) |
+| `test` | тот же образ `app` | — | Прогон Pest-сьюта на in-memory SQLite. Профиль `tools` (one-off) |
+
+Сервисы `vite` и `test` помечены профилями и **не** стартуют при обычном `docker compose up` — запускаются отдельно (см. ниже).
+
+> **Meilisearch** в стек намеренно не включён: в приложении пока нет полнотекстового поиска. Сервис будет добавлен вместе с этой функциональностью.
+>
+> `node_modules` контейнеров хранится в отдельном Docker-volume (`erbac-node-modules`), а не в bind-mount — иначе нативные macOS-бинарники из Herd конфликтуют с Linux-сборкой внутри контейнера. `vendor/` и `public/build` шарятся через bind-mount без проблем (платформонезависимы).
+>
+> Docker-окружение использует **MySQL 8 + Redis + Mailpit** независимо от вашего локального `.env` — все нужные значения задаются через `environment:` в `docker-compose.yml` и переопределяют файл `.env` (иммутабельный Dotenv). Поэтому параллельная работа через Herd (SQLite) и через Docker не конфликтует.
+
+### Запуск
+
+```bash
+# Собрать образ и поднять весь стек в фоне
+docker compose up -d --build
+
+# Следить за инициализацией приложения (миграции, сидеры, сборка ассетов)
+docker compose logs -f app
+```
+
+При первом старте `app`-контейнер автоматически: установит зависимости (если нет `vendor/`), создаст `.env` и `APP_KEY` (если нет), дождётся MySQL, прогонит миграции, **на свежей БД** запустит сидеры (демо-тенанты и пользователи), соберёт фронтенд и поднимет php-fpm.
+
+После сообщения `ready to handle connections` откройте:
+
+- приложение → **http://localhost:8080** (`/login`, демо-учётки — см. [Демо-пользователи](#демо-пользователи));
+- Mailpit (письма: инвайты, сброс пароля, верификация) → **http://localhost:8025**;
+- DBGate (просмотр MySQL и Redis в одном интерфейсе) → **http://localhost:3000** (подключения `MySQL (enterprise_rbac)` и `Redis` уже преднастроены через env);
+- health-check → **http://localhost:8080/up**.
+
+### Прогон тестов в Docker
+
+Тесты гоняются на in-memory SQLite, поэтому им **не нужны** MySQL/Redis. Отдельный сервис `test` (профиль `tools`) поднимается one-off и задаёт тестовое окружение явными env-переменными, изолируя сьют от рантайм-конфигурации приложения:
+
+```bash
+docker compose run --rm test                  # весь сьют (162 теста)
+docker compose run --rm test --filter=Rbac    # аргументы пробрасываются в `php artisan test`
+docker compose run --rm test --parallel
+```
+
+> Почему отдельный сервис, а не `docker compose exec app php artisan test`: в `app`-контейнере выставлены `DB_CONNECTION=mysql`/`CACHE_STORE=redis`. Эти значения попадают в `$_SERVER`, который Laravel читает раньше `phpunit.xml`, поэтому `php artisan test` внутри `app` пошёл бы в боевую dev-БД. `phpunit.xml` дополнительно помечен `force="true"`, но надёжнее всего — запускать через сервис `test` с чистым окружением.
+
+### Фронтенд с горячей перезагрузкой (Vite HMR)
+
+По умолчанию `app` собирает ассеты один раз при старте (`public/build`), и приложение отдаёт их статикой. Для live-reload поднимите сервис `vite` (профиль `dev`):
+
+```bash
+docker compose --profile dev up -d vite   # Vite на http://localhost:5173 + HMR
+docker compose logs -f vite
+```
+
+Пока `vite` запущен, создаётся `public/hot`, и Blade-директива `@vite` переключается на dev-сервер (правки CSS/JS подхватываются мгновенно). Остановить: `docker compose --profile dev stop vite` (после остановки удалите `public/hot`, если он остался). Без HMR ассеты пересобираются вручную: `docker compose exec app npm run build`.
+
+### Частые команды
+
+```bash
+docker compose ps                       # статус и healthcheck сервисов
+docker compose logs -f queue            # лог воркера очереди
+docker compose exec app php artisan ... # artisan внутри контейнера
+docker compose exec app php artisan migrate:fresh --seed   # пересоздать БД
+docker compose exec app php artisan rbac:warm-cache        # прогрев кэша прав (Redis)
+docker compose exec app composer install # при изменении composer-зависимостей
+docker compose exec app npm install      # при изменении npm-зависимостей (в Linux-volume)
+docker compose exec mysql mysql -uerbac -psecret enterprise_rbac  # SQL-консоль
+docker compose down                     # остановить (данные БД/redis сохраняются в volume)
+docker compose down -v                  # остановить и удалить volume'ы (полный сброс)
+```
+
 ## Запуск
+
+Вне Docker (например, через Laravel Herd) приложение по-умолчанию использует SQLite и `database`-сторы:
 
 ```bash
 php artisan serve
@@ -451,6 +539,12 @@ php artisan rbac:usage --unused
 # архивировать старые записи аудита в JSONL и удалить из БД (--tenant=slug, --dry-run)
 php artisan audit:archive
 php artisan audit:archive --dry-run
+
+# прогреть кэш прав для активных пользователей (после деплоя/сброса кэша; --tenant=id)
+php artisan rbac:warm-cache
+
+# удалить просроченные выдачи ролей/прав и сбросить кэш владельцев (--dry-run)
+php artisan rbac:prune-expired
 
 # список всех роутов
 php artisan route:list

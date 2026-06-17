@@ -1421,3 +1421,55 @@ This wave makes the audit trail observable: it surfaces diffs and filters in the
 - [ ] `audit:archive` moves rows older than the retention window to a JSONL file and prunes them; `tenants.settings.audit_retention_days = 0` disables pruning for that tenant; `--dry-run` changes nothing.
 - [ ] Destructive routes (tenant toggle, role delete, admin password set, sink delete) redirect to `password.confirm` until the password is confirmed.
 - [ ] The super-admin observability dashboard renders for super-admins and is forbidden for tenant users; the dashboard live feed returns JSON for `audit.view` holders and 403 otherwise.
+
+## 26. Performance & infrastructure wave (Improvements 4.1, 4.2 infra, 4.6, 4.8, 4.9)
+
+This wave containerises the project for one-command onboarding and adds two RBAC maintenance commands. The application's default drivers stay untouched (SQLite + `database` cache/queue/session) so Herd and the test suite are unaffected — Docker is purely additive and supplies its own MySQL/Redis/Mailpit configuration via compose `environment:` (which wins over `.env` thanks to Laravel's immutable Dotenv).
+
+### 26.1 Permission cache warming (Improvement 4.1)
+
+- `app/Console/Commands/WarmPermissionCache` (signature `rbac:warm-cache {--tenant=}`) — iterates active, non-super-admin users with `lazyById()`, calls `ForgetUserPermissionsCache::forUser()` then `ResolveUserPermissions::handle()` to repopulate the cache, and reports the count. Works with any cache store; in Docker the store is Redis. No resolver changes are needed — it already caches through the standard repository.
+
+### 26.2 Scheduled expired-grant cleanup (Improvement 4.8)
+
+- `app/Console/Commands/PruneExpiredGrants` (signature `rbac:prune-expired {--dry-run}`) — deletes rows from `role_user`/`permission_user` whose `expires_at` is non-null and in the past, then flushes the permission cache for every affected user via `ForgetUserPermissionsCache`. `--dry-run` reports counts (roles/perms/users) without deleting.
+- Schedule in `routes/console.php`: `Schedule::command('rbac:prune-expired')->dailyAt('03:00')`.
+
+### 26.3 Migration ordering fix (MySQL strict FK)
+
+- Rename `..._create_permission_group_permission_table.php` to a timestamp **after** `..._create_permission_groups_table.php` (both previously shared `2026_06_05_151909`; the pivot sorted first alphabetically and SQLite tolerated the forward FK, but MySQL 8 rejects it). New: pivot is `2026_06_05_151910`.
+
+### 26.4 Docker images & config (Improvement 4.9)
+
+- `Dockerfile` — `php:8.4-fpm` base (matches the lockfile's Herd toolchain; app requires `^8.3`). Install system deps (`git curl zip unzip procps libonig-dev libzip-dev default-mysql-client`), PHP extensions (`pdo_mysql mbstring bcmath pcntl zip` + `pecl install redis`), Node 20 (NodeSource) and Composer (from `composer:2`). Copy `docker/php/local.ini` and `docker/entrypoint.sh`; `ENTRYPOINT ["entrypoint"]`, `CMD ["php-fpm"]`.
+- `docker/php/local.ini` — dev overrides (`memory_limit=512M`, `upload_max_filesize=20M`, `post_max_size=20M`, `max_execution_time=120`).
+- `docker/nginx/default.conf` — vhost rooted at `/var/www/html/public`, `try_files ... /index.php`, `fastcgi_pass app:9000`.
+- `docker/entrypoint.sh` — dispatches on `CONTAINER_ROLE` (default `app`). The `app` role: `composer install` if `vendor/` missing, create `.env` + `key:generate` if absent, wait for DB (`php artisan db:show`), `migrate --force`, seed **only when `Tenant::count()` is 0** (seeders are not idempotent), `npm install` if `node_modules/.bin/vite` missing, `npm run build` if `public/build` missing, then `exec php-fpm`. The `queue`/`scheduler` roles wait for `vendor/`, `.env` (APP_KEY) and a successful `migrate:status`, then `exec php artisan queue:work --tries=3 --timeout=90` / `schedule:work`.
+- `.dockerignore` — excludes `.git`, `vendor`, `node_modules`, `public/build`, `.env*` (keep `.env.example`), storage caches, etc.
+
+### 26.4a node_modules platform isolation
+
+- The host (macOS/Herd) and the Linux container must not share `node_modules` — native binaries (e.g. rolldown/esbuild) are platform-specific and the host copy crashes Vite inside the container. Mount a **named volume** `erbac-node-modules` at `/var/www/html/node_modules` on the `app` (and `vite`) services so each gets Linux-native modules; `vendor/` and `public/build` stay on the bind mount (platform-independent). The entrypoint checks for `node_modules/.bin/vite` (not just the directory, which always exists as a mount point) before installing.
+
+### 26.5 docker-compose stack (Improvements 4.9, 4.2 infra, 4.6)
+
+- `docker-compose.yml` services: `app` (php-fpm), `nginx` (`nginx:1.27-alpine`, host `8080`), `mysql` (`mysql:8.0`, `enterprise_rbac`/`erbac`/`secret`, healthcheck `mysqladmin ping`), `redis` (`redis:7-alpine`, healthcheck `redis-cli ping`), `mailpit` (`axllent/mailpit`, host `8025` UI / `1025` SMTP), `dbgate` (`dbgate/dbgate`, host `3000`, universal web client with MySQL + Redis connections pre-seeded via `CONNECTIONS`/`ENGINE_*` env, `/root/.dbgate` on volume `erbac-dbgate`), `queue` and `scheduler` (same image, `CONTAINER_ROLE` set; `queue` has a `pgrep -f queue:work` liveness healthcheck). **No Meilisearch** — there is no search feature yet.
+- A YAML anchor `&app-env` shares the env block across `app`/`queue`/`scheduler`: `DB_CONNECTION=mysql`, `DB_HOST=mysql`, `CACHE_STORE=redis`, `SESSION_DRIVER=redis`, `QUEUE_CONNECTION=redis`, `REDIS_HOST=redis`, `MAIL_MAILER=smtp`, `MAIL_HOST=mailpit`, `MAIL_PORT=1025`, `APP_URL=http://localhost:8080`. This satisfies 4.6 (horizontal-scaling readiness: stateless app, Redis-backed session/cache/queue, `/up` healthcheck) and 4.2's worker+healthcheck requirement.
+- Named volumes `erbac-mysql`, `erbac-redis`, `erbac-node-modules`, `erbac-dbgate`; bridge network `erbac`.
+- `vite` service (profile `dev`): same image, shares the `erbac-node-modules` volume, waits for `node_modules/.bin/vite` then `npm run dev -- --host`, publishes `5173`, sets `VITE_DOCKER=true`. `vite.config.js` reads `VITE_DOCKER` and switches `server.host` to `0.0.0.0`, enables `strictPort` + `hmr.host=localhost` + `watch.usePolling` so the browser HMR socket targets `localhost:5173` and the `public/hot` URL is correct.
+- `test` service (profile `tools`, `restart: "no"`, `entrypoint: ["php","artisan","test"]`): explicit testing env (`APP_ENV=testing`, `DB_CONNECTION=sqlite`, `DB_DATABASE=:memory:`, `CACHE_STORE=array`, `SESSION_DRIVER=array`, `QUEUE_CONNECTION=sync`, `MAIL_MAILER=array`, `BCRYPT_ROUNDS=4`). Run via `docker compose run --rm test [args]`.
+
+### 26.6 Test isolation (phpunit + the `$_SERVER` gotcha)
+
+- `phpunit.xml` `<env>` entries gain `force="true"`. **Important caveat:** PHPUnit's `force` overwrites `$_ENV` and `putenv()` but NOT `$_SERVER`, and Docker `environment:`/`-e` variables populate `$_SERVER`, which Laravel's env repository reads first. So `force` alone does **not** stop `docker compose exec app php artisan test` from using the app's MySQL/Redis env. The robust answer is the dedicated `test` service above, which sets the testing values as real env vars (present in `$_SERVER`) and carries no MySQL/Redis dependency.
+- `tests/Feature/RbacMaintenanceTest.php` — `rbac:warm-cache` populates the cache for an active user and skips inactive/super-admin users; `rbac:prune-expired` deletes expired pivot rows while keeping active ones, and `--dry-run` deletes nothing.
+
+### 26.7 Acceptance checklist (delta on top of sections 19, 22-25)
+
+- [ ] `php artisan test` reports **>=162** passing tests; `vendor/bin/pint --dirty` is clean. The migration rename does not break the SQLite suite.
+- [ ] `docker compose up -d --build` brings up app/nginx/mysql/redis/mailpit/queue/scheduler; `http://localhost:8080/up` and `/login` return 200 and `http://localhost:8025` shows Mailpit.
+- [ ] Inside the app container, `cache.default`/`queue.default`/`session.driver` resolve to `redis` and `database.default` to `mysql`; `rbac:warm-cache` warms the demo users; the `queue` container is healthy.
+- [ ] `rbac:prune-expired` removes only expired grants and flushes the affected users' permission cache; the scheduler container runs `audit:archive` and `rbac:prune-expired` on schedule.
+- [ ] `docker compose run --rm test` runs the whole Pest suite on in-memory SQLite (no MySQL/Redis needed) and passes.
+- [ ] `docker compose --profile dev up -d vite` serves Vite on `5173`, writes a `public/hot` pointing at `http://localhost:5173`, and `/@vite/client` returns 200.
+- [ ] Non-Docker (Herd/SQLite) behaviour and the test suite are unchanged.
