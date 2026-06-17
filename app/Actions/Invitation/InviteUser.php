@@ -10,7 +10,9 @@ use App\Models\Invitation;
 use App\Models\Role;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Notifications\InvitationNotification;
 use DomainException;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Str;
 
 final readonly class InviteUser
@@ -62,6 +64,11 @@ final readonly class InviteUser
             'role_slug' => $role?->slug,
             'expires_at' => $invitation->expires_at->format(DATE_ATOM),
         ]);
+
+        // Queued so the controller response is not blocked on mail delivery.
+        Notification::route('mail', $email)->notify(
+            new InvitationNotification($tenant->name, $invitation->token, $actor->name)
+        );
 
         return $invitation;
     }

@@ -138,6 +138,9 @@ Route::middleware('auth')->group(function () {
 
                 Route::get('audit', [AdminAuditController::class, 'index'])->name('audit.index');
                 Route::post('audit/export', [AdminAuditController::class, 'export'])->name('audit.export');
+                Route::get('audit/export/{filename}', [AdminAuditController::class, 'download'])
+                    ->middleware('signed')
+                    ->name('audit.export.download');
 
                 Route::get('audit-sinks', [AuditSinkController::class, 'index'])->name('audit-sinks.index');
                 Route::post('audit-sinks', [AuditSinkController::class, 'store'])->name('audit-sinks.store');

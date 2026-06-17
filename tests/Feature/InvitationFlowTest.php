@@ -5,12 +5,16 @@ declare(strict_types=1);
 use App\Models\Invitation;
 use App\Models\Permission;
 use App\Models\User;
+use App\Notifications\InvitationNotification;
+use Illuminate\Support\Facades\Notification;
 
 beforeEach(function () {
     $this->tenant = makeTenant();
 });
 
 it('allows tenant admin to invite a user with a role', function () {
+    Notification::fake();
+
     $admin = makeUserWithRole($this->tenant, 'tenant-admin');
     $sales = tenantRole($this->tenant, 'sales');
 
@@ -26,6 +30,11 @@ it('allows tenant admin to invite a user with a role', function () {
         'email' => 'new@acme.test',
         'role_id' => $sales->id,
     ]);
+
+    Notification::assertSentOnDemand(
+        InvitationNotification::class,
+        fn ($notification, $channels, $notifiable) => $notifiable->routes['mail'] === 'new@acme.test'
+    );
 });
 
 it('blocks role escalation: cannot invite a user with a higher role', function () {
