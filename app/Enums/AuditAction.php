@@ -59,4 +59,13 @@ enum AuditAction: string
     case AuditSinkUpdated = 'audit_sink_updated';
     case AuditSinkDeleted = 'audit_sink_deleted';
     case AuditArchived = 'audit_archived';
+
+    case ReportExported = 'report_exported';
+
+    case AttachmentUploaded = 'attachment_uploaded';
+    case AttachmentDeleted = 'attachment_deleted';
+
+    case CustomFieldCreated = 'custom_field_created';
+    case CustomFieldUpdated = 'custom_field_updated';
+    case CustomFieldDeleted = 'custom_field_deleted';
 }

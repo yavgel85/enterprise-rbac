@@ -35,6 +35,7 @@ class Deal extends Model
         'owner_id',
         'created_by',
         'status',
+        'lost_reason',
     ];
 
     protected $attributes = [

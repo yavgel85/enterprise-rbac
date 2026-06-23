@@ -32,6 +32,9 @@
             <a href="{{ route('crm.deals.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('crm.deals.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Deals</a>
             <a href="{{ route('crm.tasks.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('crm.tasks.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Tasks</a>
             <a href="{{ route('crm.activities.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('crm.activities.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Activities</a>
+            @if ($tenant->hasFeature('advanced_analytics') && $user->hasPermission(\App\Enums\Permission::ReportsView))
+                <a href="{{ route('crm.reports.analytics', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('crm.reports.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Analytics</a>
+            @endif
             @if ($user->hasPermission(\App\Enums\Permission::ApprovalsView))
                 @php($pendingApprovals = \App\Models\ApprovalRequest::pendingForUser($user)->count())
                 <a href="{{ route('crm.approvals.index', $tenant) }}" class="flex items-center justify-between px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('crm.approvals.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">
@@ -53,6 +56,9 @@
             <a href="{{ route('admin.audit.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.audit.index') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Audit log</a>
             @if ($user->hasPermission(\App\Enums\Permission::AuditManage))
                 <a href="{{ route('admin.audit-sinks.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.audit-sinks.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Audit sinks</a>
+            @endif
+            @if ($user->hasPermission(\App\Enums\Permission::CustomFieldsManage))
+                <a href="{{ route('admin.custom-fields.index', $tenant) }}" class="block px-3 py-2 rounded-md hover:bg-gray-800 {{ request()->routeIs('admin.custom-fields.*') ? 'bg-gray-800 text-white' : 'text-gray-300' }}">Custom fields</a>
             @endif
         @endif
     </nav>

@@ -62,6 +62,10 @@ enum Permission: string
 
     case ApprovalsView = 'approvals.view';
 
+    case ReportsView = 'reports.view';
+
+    case CustomFieldsManage = 'custom-fields.manage';
+
     case FeaturesView = 'features.view';
 
     public function module(): string

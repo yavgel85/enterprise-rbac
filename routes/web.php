@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Admin\AuditController as AdminAuditController;
 use App\Http\Controllers\Admin\AuditSinkController;
+use App\Http\Controllers\Admin\CustomFieldController;
 use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\PermissionConditionController;
 use App\Http\Controllers\Admin\PermissionController as AdminPermissionController;
@@ -16,9 +17,11 @@ use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\PasswordResetController;
 use App\Http\Controllers\Crm\ActivityController;
 use App\Http\Controllers\Crm\ApprovalController;
+use App\Http\Controllers\Crm\AttachmentController;
 use App\Http\Controllers\Crm\CompanyController;
 use App\Http\Controllers\Crm\ContactController;
 use App\Http\Controllers\Crm\DealController;
+use App\Http\Controllers\Crm\ReportsController;
 use App\Http\Controllers\Crm\TaskController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ProfileController;
@@ -142,6 +145,13 @@ Route::middleware('auth')->group(function () {
                     ->middleware('signed')
                     ->name('audit.export.download');
 
+                Route::middleware('permission:custom-fields.manage')->group(function () {
+                    Route::get('custom-fields', [CustomFieldController::class, 'index'])->name('custom-fields.index');
+                    Route::post('custom-fields', [CustomFieldController::class, 'store'])->name('custom-fields.store');
+                    Route::put('custom-fields/{customField}', [CustomFieldController::class, 'update'])->name('custom-fields.update');
+                    Route::delete('custom-fields/{customField}', [CustomFieldController::class, 'destroy'])->name('custom-fields.destroy');
+                });
+
                 Route::get('audit-sinks', [AuditSinkController::class, 'index'])->name('audit-sinks.index');
                 Route::post('audit-sinks', [AuditSinkController::class, 'store'])->name('audit-sinks.store');
                 Route::put('audit-sinks/{auditSink}', [AuditSinkController::class, 'update'])->name('audit-sinks.update');
@@ -158,8 +168,19 @@ Route::middleware('auth')->group(function () {
                 Route::resource('tasks', TaskController::class);
                 Route::post('tasks/{task}/complete', [TaskController::class, 'complete'])->name('tasks.complete');
 
+                Route::middleware(['feature:advanced_analytics', 'permission:reports.view'])->group(function () {
+                    Route::get('reports/analytics', [ReportsController::class, 'analytics'])->name('reports.analytics');
+                    Route::get('reports/analytics.pdf', [ReportsController::class, 'dealsPdf'])->name('reports.analytics.pdf');
+                });
+
                 Route::get('approvals', [ApprovalController::class, 'index'])->name('approvals.index');
                 Route::post('approvals/{approvalRequest}/decide', [ApprovalController::class, 'decide'])->name('approvals.decide');
+
+                Route::post('attachments', [AttachmentController::class, 'store'])->name('attachments.store');
+                Route::get('attachments/{attachment}/download', [AttachmentController::class, 'download'])
+                    ->middleware('signed')
+                    ->name('attachments.download');
+                Route::delete('attachments/{attachment}', [AttachmentController::class, 'destroy'])->name('attachments.destroy');
 
                 Route::get('activities', [ActivityController::class, 'index'])->name('activities.index');
                 Route::get('activities/create', [ActivityController::class, 'create'])->name('activities.create');

@@ -24,6 +24,8 @@ class ModuleSeeder extends Seeder
             ['slug' => 'activities', 'name' => 'Activities', 'description' => 'Calls, meetings, emails, notes', 'sort_order' => 90],
             ['slug' => 'audit', 'name' => 'Audit', 'description' => 'Audit log access', 'sort_order' => 100],
             ['slug' => 'approvals', 'name' => 'Approvals', 'description' => 'Multi-step approval queue', 'sort_order' => 105],
+            ['slug' => 'reports', 'name' => 'Reports', 'description' => 'Pipeline analytics & PDF reports', 'sort_order' => 108],
+            ['slug' => 'custom-fields', 'name' => 'Custom fields', 'description' => 'Tenant-defined custom field definitions', 'sort_order' => 109],
             ['slug' => 'features', 'name' => 'Features', 'description' => 'Feature flag visibility', 'sort_order' => 110],
         ];
 

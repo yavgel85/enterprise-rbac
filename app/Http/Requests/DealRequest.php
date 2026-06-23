@@ -33,6 +33,8 @@ class DealRequest extends FormRequest
             'probability' => ['required', 'integer', 'min:0', 'max:100'],
             'expected_close_date' => ['nullable', 'date'],
             'owner_id' => ['nullable', 'integer', 'exists:users,id'],
+            // Captured for win/loss analytics; only meaningful when stage = lost.
+            'lost_reason' => ['nullable', 'string', 'max:255', Rule::requiredIf($this->input('stage') === DealStage::Lost->value)],
         ];
     }
 }
