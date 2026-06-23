@@ -44,7 +44,7 @@
 
 ### RBAC
 
-- **46 атомарных permission** в формате `module.action`, описанных как **PHP enum** `App\Enums\Permission` — type-safe, IDE-friendly, синхронизируются в БД сидером.
+- **48 атомарных permission** в формате `module.action`, описанных как **PHP enum** `App\Enums\Permission` — type-safe, IDE-friendly, синхронизируются в БД сидером.
 - **5 системных ролей** (`tenant-admin`, `manager`, `sales`, `auditor`, `viewer`) с уровнями (`level: 0-100`) для предотвращения privilege escalation.
 - **Несколько ролей у одного пользователя** + **TTL** через `role_user.expires_at`.
 - **JIT / time-bound elevated access** — tenant-admin выдаёт пользователю **временную роль на N часов** (`GrantTemporaryRole`), не трогая постоянные назначения; права исчезают автоматически по истечении срока.
@@ -72,6 +72,10 @@
   - `tasks.complete` — только assignee или creator.
   - Пользователь не может удалить сам себя.
 - **Department-aware** ограничения — deal может быть «закреплён» за подразделением.
+- **Pipeline analytics** (за feature-flag `advanced_analytics` + право `reports.view`) — страница `crm/reports/analytics`: воронка конверсии и сумма сделок по владельцам (графики `Chart.js`), средний цикл выигранных сделок, win/loss-разбивка по причинам (поле `deals.lost_reason`, обязательно при стадии `lost`). Действие `PipelineAnalytics` считает все метрики одним tenant-scoped запросом.
+- **PDF-отчёт** — кнопка _Download PDF_ на странице аналитики стримит отчёт через `barryvdh/laravel-dompdf` (self-contained Blade-шаблон, без внешних ассетов); экспорт пишет аудит `report_exported`.
+- **File attachments** — к Company/Contact/Deal/Task можно прикреплять файлы (полиморфная таблица `attachments`, трейт `HasAttachments`). Хранение на приватном диске под `tenants/{id}/attachments/...`, скачивание только по **подписанной** ссылке с правом `view` на родителе, аплоад/удаление — по праву `update`. Лимит размера файла и per-tenant квота настраиваются в `config/attachments.php`.
+- **Custom fields (EAV)** — tenant-admin (право `custom-fields.manage`) в разделе `Admin → Custom fields` определяет свои поля для каждой сущности (типы `text/number/date/select/boolean/user`). Поля рендерятся на формах CRM динамически, валидируются по определению **до** сохранения и отображаются на странице записи. Хранилище — `custom_field_definitions` + `custom_field_values` (полиморфные значения), доступ через трейт `HasCustomFields` и хелпер `cf('key')`.
 
 ### Audit log
 
@@ -102,7 +106,8 @@
 | Backend | PHP 8.3+, Laravel 13 |
 | База данных | SQLite (dev/Herd) · MySQL 8 (Docker) — все миграции совместимы с MySQL/Postgres |
 | Кэш / сессии / очередь | `database` driver (Herd) · Redis 7 (Docker) |
-| Фронтенд | Blade + Tailwind CSS 4 (Vite) |
+| Фронтенд | Blade + Tailwind CSS 4 (Vite) · Chart.js (CDN, для аналитики) |
+| PDF | `barryvdh/laravel-dompdf` |
 | Тесты | Pest 4 + LazilyRefreshDatabase |
 | Форматтер | Laravel Pint |
 | Контейнеризация | Docker + docker-compose (app/nginx/mysql/redis/mailpit/queue/scheduler) |
@@ -187,7 +192,7 @@ php artisan key:generate
 mkdir -p database
 touch database/database.sqlite
 
-# 6. Миграции + сидеры (создаст 18 таблиц, 42 permissions, 5 ролей на тенант, демо-данные)
+# 6. Миграции + сидеры (создаст таблицы, 48 permissions, 5 ролей на тенант, демо-данные)
 php artisan migrate:fresh --seed
 
 # 7. Билд фронтенда для production
@@ -374,6 +379,8 @@ php artisan serve
 | `audit.export`    | ✓ |   |   | ✓ |   |
 | `audit.manage`    | ✓ |   |   |   |   |
 | `approvals.view`  | ✓ | ✓ |   |   |   |
+| `reports.view`    | ✓ | ✓ |   |   |   |
+| `custom-fields.manage` | ✓ |   |   |   |   |
 | `features.view`   | ✓ |   |   |   |   |
 
 ### Что роль может — простыми словами
@@ -391,6 +398,9 @@ php artisan serve
 | Approve deal (рабочие часы, будни) |   | ✓ | ✓ |   |   |   |
 | Просматривать audit log |   | ✓ | ✓ |   | ✓ |   |
 | Экспортировать audit в CSV (feature flag) |   | ✓ |   |   | ✓ |   |
+| Pipeline analytics + PDF (feature `advanced_analytics`) |   | ✓ | ✓ |   |   |   |
+| Настраивать custom fields |   | ✓ |   |   |   |   |
+| Прикреплять файлы к CRM-записям (как при `update`) |   | ✓ | ✓ | ✓ |   |   |
 | Просматривать CRM |   | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Логиниться, видеть свой dashboard | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 

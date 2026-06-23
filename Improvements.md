@@ -401,7 +401,7 @@ Cron-команда удаляющая просроченные `role_user.expir
 - Alpine.js + native HTML5 drag/drop, PATCH `crm.deals.update-stage` обновляет `stage` через политику.
 - Per-tenant настройка цвета стадий.
 
-### 5.2 Pipeline analytics (P1, M)
+### 5.2 Pipeline analytics ✅ (P1, M) — _Сделано_
 
 Feature flag `advanced_analytics` уже есть — реализовать страницу `dashboard/analytics`:
 - Конверсия по стадиям (funnel chart).
@@ -411,7 +411,9 @@ Feature flag `advanced_analytics` уже есть — реализовать с�
 
 Графики через `Chart.js`-блейд-компонент. Возможен экспорт PDF (см. 5.10).
 
-### 5.3 Custom fields (P0, L)
+> **Реализовано.** Новый permission `reports.view` (модуль `reports`, выдан manager + tenant-admin) и поле `deals.lost_reason` (миграция `add_lost_reason_to_deals_table`, обязательно при `stage = lost` через `DealRequest`). Действие `App\Actions\Reports\PipelineAnalytics` единым tenant-scoped запросом считает воронку (count + amount по стадиям), сумму сделок по владельцам, средний цикл выигранных сделок и win/loss-разбивку по причинам — результат потребляют и HTML-страница, и PDF, поэтому цифры не расходятся. Страница `crm.reports.analytics` рисует funnel/owner-графики через `Chart.js` (CDN, новый `@stack('scripts')` в layout), ссылка в сайдбаре скрыта за фичей + правом. Маршруты в группе `feature:advanced_analytics` + `permission:reports.view`. Pest: `tests/Feature/ReportsTest.php`.
+
+### 5.3 Custom fields ✅ (P0, L) — _Сделано_
 
 **Зачем.** Каждому тенанту нужны свои поля (e.g. "Renewal date", "Account manager", "Region").
 
@@ -421,6 +423,8 @@ Feature flag `advanced_analytics` уже есть — реализовать с�
 - `HasCustomFields` trait добавляет `customFields(): morphMany` и accessor `getCfAttribute($key)`.
 - UI: admin → "Custom fields" редактор; на формах CRM рендерятся динамически.
 - Form validation generates rules from definitions.
+
+> **Реализовано.** EAV-подсистема для всех CRM-сущностей (Company, Contact, Deal, Task). Миграции `create_custom_field_definitions_table` (unique `tenant_id+model_type+key`) и `create_custom_field_values_table` (полиморфный `owner`, колонки `value_text/value_number/value_date/value_json`, unique по definition+owner). Enum `App\Enums\CustomFieldType` (text/number/date/select/boolean/user) инкапсулирует целевую колонку, правила валидации и приведение типа. Трейт `HasCustomFields` даёт `customFieldValues(): morphMany` + хелпер `cf($key)`. Действие `App\Actions\CustomField\SyncCustomFields` генерирует правила из определений (`custom_fields.{key}`) — валидация выполняется **до** создания записи, поэтому транзакция остаётся целостной — и апсертит значения. Админский редактор `admin/custom-fields` (право `custom-fields.manage`, модуль `custom-fields`) создаёт/редактирует/удаляет поля; формы и страницы show CRM рендерят поля динамически (`crm/_custom-fields*.blade.php`). Pest: `tests/Feature/CustomFieldTest.php`.
 
 ### 5.4 Bulk CSV import (P1, M)
 
@@ -439,9 +443,11 @@ Feature flag `bulk_import` уже зарезервирован. Реализов
 
 `comments(tenant_id, commentable_type, commentable_id, user_id, body, parent_id, created_at)`. UI на странице show `Deal/Company/Contact/Task` — thread с @mentions. Mention триггерит in-app notification.
 
-### 5.7 File attachments (P0, M)
+### 5.7 File attachments ✅ (P0, M) — _Сделано_
 
 Тенант-scoped storage (`storage/app/tenants/{id}/...` или S3 prefix). Полиморфная таблица `attachments(tenant_id, attachable_type, attachable_id, disk, path, name, size, mime, uploaded_by)`. Signed URLs для скачивания. Лимит размера + per-tenant квота.
+
+> **Реализовано.** Миграция `create_attachments_table` (полиморфный `attachable`, `tenant_id`, индекс по tenant+attachable), модель `Attachment` (BelongsToTenant, `humanSize()`), трейт `HasAttachments` подключён к Company/Contact/Deal/Task. Файлы лежат на приватном диске под `tenants/{id}/attachments/...`. Действие `App\Actions\Attachment\UploadAttachment` сохраняет файл, пишет запись и аудит `attachment_uploaded`. `Crm\AttachmentController`: `store` (whitelist коротких ключей сущностей вместо сырого класса, проверка `update` на родителе, лимит файла из `config/attachments.php` и per-tenant квота), `download` (только по подписанному URL + право `view` на родителе), `destroy` (право `update`, аудит `attachment_deleted`). Виджет аплоада/списка добавлен на страницы show всех четырёх сущностей. Pest: `tests/Feature/AttachmentTest.php`.
 
 ### 5.8 Recurring tasks (P2, M)
 
@@ -451,9 +457,11 @@ Feature flag `bulk_import` уже зарезервирован. Реализов
 
 Self-FK `tasks.parent_id`. Логика "не закрыть task, пока subtasks не done". UI tree-view.
 
-### 5.10 PDF generation для отчётов (P1, M)
+### 5.10 PDF generation для отчётов ✅ (P1, M) — _Сделано_
 
 `barryvdh/laravel-dompdf` (или `spatie/browsershot`). Шаблоны Blade. Контроллер `Reports::dealsPdf($tenant, request())` стримит PDF. Используется в pipeline-analytics и quarterly-reports.
+
+> **Реализовано.** Подключён `barryvdh/laravel-dompdf`. `Crm\ReportsController::dealsPdf` берёт те же данные из `PipelineAnalytics`, рендерит самодостаточный Blade-шаблон `crm/reports/deals-pdf.blade.php` (DejaVu Sans, inline-CSS — без внешних ассетов) и стримит PDF; экспорт пишет аудит `report_exported`. Кнопка _Download PDF_ на странице аналитики, тот же гейтинг `feature:advanced_analytics` + `permission:reports.view`. Pest-проверка PDF-ответа — в `tests/Feature/ReportsTest.php`.
 
 ### 5.11 Multi-currency и conversion (P2, M)
 
@@ -796,8 +804,8 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 4.1 | Redis cache ✅ | P0 | S | 1 |
 | 4.2 | Queue worker ✅ | P1 | M | 2 |
 | 4.5 | DB indexes review ✅ | P1 | S | 1 |
-| 5.7 | File attachments | P0 | M | 2 |
-| 5.3 | Custom fields (EAV) | P0 | L | 3 |
+| 5.7 | File attachments ✅ | P0 | M | 2 |
+| 5.3 | Custom fields (EAV) ✅ | P0 | L | 3 |
 | 6.1 | Email notifications | P0 | M | 1 |
 | 7.1 | REST API + Sanctum | P0 | M | 2 |
 | 9.1 | Right to erasure | P0 | M | 2 |
@@ -818,11 +826,11 @@ Telescope: debug queries/jobs/notifications/cache. Pulse: production health.
 | 3.7 | App monitoring ✅ | P1 | M | 2 |
 | 4.9 | Docker dev ✅ | P1 | M | 1 |
 | 5.1 | Kanban board | P1 | M | 2 |
-| 5.2 | Pipeline analytics | P1 | M | 2 |
+| 5.2 | Pipeline analytics ✅ | P1 | M | 2 |
 | 5.4 | Bulk CSV import | P1 | M | 2 |
 | 5.5 | Tags/Labels | P1 | S | 1 |
 | 5.6 | Comments | P1 | M | 2 |
-| 5.10 | PDF reports | P1 | M | 2 |
+| 5.10 | PDF reports ✅ | P1 | M | 2 |
 | 6.2 | In-app notifications | P1 | M | 2 |
 | 6.3 | Outgoing webhooks | P1 | M | 2 |
 | 7.2 | API tokens | P1 | S | 2 |

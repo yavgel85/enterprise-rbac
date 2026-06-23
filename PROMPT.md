@@ -1508,3 +1508,49 @@ This wave moves the remaining heavy work off the request cycle, adds query index
 - [ ] Inviting a user queues `InvitationNotification` to the invitee email.
 - [ ] The three indexed tables show the new composite indexes after `migrate`; the SQLite suite still passes.
 - [ ] `tenant_cache_key()` namespaces by tenant; the audit-actions dropdown is cached per-tenant.
+
+## 28. CRM feature wave (Improvements 5.2 analytics, 5.10 PDF, 5.7 attachments, 5.3 custom fields)
+
+This wave adds four CRM capabilities. All are **additive and gated**: new permissions default only to roles that explicitly receive them, and nothing changes the effective permissions of existing seeded roles for features they don't opt into. Everything stays SQLite-compatible. After implementing, `php artisan test --compact` must report **>=188** passing tests and `vendor/bin/pint --dirty` must be clean.
+
+### 28.0 Shared catalog changes
+
+- `app/Enums/Permission`: add `ReportsView = 'reports.view'` and `CustomFieldsManage = 'custom-fields.manage'`. Their module prefixes (`reports`, `custom-fields`) **must** be added to `ModuleSeeder` (slugs `reports`, `custom-fields`) — `PermissionSeeder` skips any permission whose module row is missing, so without the modules the permissions silently never seed.
+- `app/Authorization/RoleRegistry`: grant `ReportsView` to the **manager** role (tenant-admin already gets every permission via `Permission::cases()`). `CustomFieldsManage` is left to tenant-admin/super-admin only.
+- `app/Enums/AuditAction`: add `ReportExported`, `AttachmentUploaded`, `AttachmentDeleted`, `CustomFieldCreated`, `CustomFieldUpdated`, `CustomFieldDeleted`.
+
+### 28.1 Pipeline analytics + PDF (Improvements 5.2, 5.10)
+
+- Migration `2026_06_23_120000_add_lost_reason_to_deals_table`: nullable `deals.lost_reason` string. Add to `Deal::$fillable` and to `DealRequest` rules as `['nullable','string','max:255', Rule::requiredIf(stage === lost)]`. The deal `_form` shows a "Lost reason" input.
+- `app/Actions/Reports/PipelineAnalytics::handle(Tenant): array` computes, in tenant-scoped aggregate queries: `funnel` (count + amount per `DealStage` in enum order), `per_owner` (count + amount grouped by `owner_id`, owner names resolved, sorted desc), `win_loss` (won/lost counts + loss reasons grouped, `Unspecified` for blanks), `averages` (`cycle_days` = avg `created_at→closed_at` of won deals, `deal_size`), `totals`. The same array feeds both the HTML page and the PDF.
+- Install `barryvdh/laravel-dompdf`.
+- `Crm\ReportsController`: `analytics(Tenant)` → `crm/reports/analytics.blade.php` (KPI cards + `Chart.js` funnel/owner bar charts via CDN inside a new `@stack('scripts')` appended to `layouts/app`); `dealsPdf(Tenant)` → audits `report_exported`, renders self-contained `crm/reports/deals-pdf.blade.php` (DejaVu Sans, inline CSS, no external assets) and `->download(...)`.
+- Routes nested in the existing `crm` group, wrapped in `middleware(['feature:advanced_analytics','permission:reports.view'])`: `reports/analytics` and `reports/analytics.pdf`. Sidebar link shown only when `$tenant->hasFeature('advanced_analytics')` and the user has `reports.view`.
+- Pest: `tests/Feature/ReportsTest.php` — feature-flag gate, permission gate, manager sees funnel + loss reasons, PDF content-type, required `lost_reason`.
+
+### 28.2 File attachments (Improvement 5.7)
+
+- `config/attachments.php`: `disk` (default private `local`), `max_file_kb`, `tenant_quota_mb`, `download_ttl_minutes` (all env-overridable).
+- Migration `create_attachments_table`: `tenant_id`, polymorphic `attachable`, `disk`, `path`, `name`, `size`, `mime`, nullable `uploaded_by`, index `(tenant_id, attachable_type, attachable_id)`.
+- `Attachment` model (`BelongsToTenant`, `uploader()`, `humanSize()` via `Number::fileSize`). Trait `HasAttachments` (`attachments(): morphMany ->latest()`) added to Company/Contact/Deal/Task.
+- `app/Actions/Attachment/UploadAttachment::handle(User, Model, UploadedFile)`: stores under `tenants/{tenantId}/attachments`, creates the row, audits `attachment_uploaded`.
+- `Crm\AttachmentController`: a private `ATTACHABLES` whitelist maps short keys (`company/contact/deal/task`) → model classes (never accept a raw class name). `store` validates type/id/file (`max:` from config), `authorize('update', $attachable)`, enforces the per-tenant byte quota, then uploads. `download` is `signed`-only, `authorize('view')`, streams via `Storage::download`. `destroy` `authorize('update')`, deletes file + row, audits `attachment_deleted`.
+- Routes inside `crm` group: `POST attachments`, `GET attachments/{attachment}/download` (`signed`), `DELETE attachments/{attachment}`. The `_attachments` partial (upload form + signed download links + delete) is included on every CRM `show` page.
+- Pest: `tests/Feature/AttachmentTest.php` — upload+record, permission gate, quota, signed vs unsigned download, delete.
+
+### 28.3 Custom fields / EAV (Improvement 5.3)
+
+- Enum `app/Enums/CustomFieldType` (`text,number,date,select,boolean,user`): each case knows its storage `column()` (`value_text`/`value_number`/`value_date`/`value_json`; boolean → `value_json`, number+user → `value_number`), its validation `rules(bool $required, array $options)`, and how to `cast()` a raw stored value.
+- Migrations: `create_custom_field_definitions_table` (`tenant_id`, `model_type`, `key`, `label`, `type`, `options` json, `required`, `position`; unique `tenant_id+model_type+key`) and `create_custom_field_values_table` (`definition_id`, polymorphic `owner`, the four value columns; unique `definition_id+owner_type+owner_id`).
+- Models `CustomFieldDefinition` (`BelongsToTenant`, casts `type` enum + `options` array, `scopeForModel($class)`) and `CustomFieldValue` (`typedValue()` reads the type's column and casts). Trait `HasCustomFields` (`customFieldValues(): morphMany`, `cf(string $key)`) added to the four CRM models. `model_type` is stored as the FQCN (no morph map registered).
+- `app/Actions/CustomField/SyncCustomFields`: `rules($modelType)` returns `["custom_fields.{key}" => …]` from definitions; `persist($owner, $input)` upserts one row per definition (boolean coerced via `filter_var`). Each CRM controller's `store`/`update` calls `$request->validate($sync->rules(X::class))` **before** create/update (so a failure aborts before any write) and `$sync->persist($model, $request->input('custom_fields', []))` after.
+- Admin `Admin\CustomFieldController` (routes under `admin` group, `middleware('permission:custom-fields.manage')`): `index` lists definitions grouped by model + a create form, `store` (validates `model` against the whitelist, slug `key` regex, enum `type`, parses `options` for select), `update` (label/required/position/options), `destroy`. Each create/update/delete audits the matching `custom_field_*` action. `app/Support/CustomFieldModels` holds the short-key↔class whitelist.
+- Forms render `crm/_custom-fields.blade.php` (typed inputs, `custom_fields[{key}]`, old() + existing values) inside every CRM `_form`; show pages render read-only `crm/_custom-fields-show.blade.php`. Sidebar exposes the admin editor when the user has `custom-fields.manage`.
+- Pest: `tests/Feature/CustomFieldTest.php` — admin creates a definition, permission gate, value persistence + `cf()`, required enforcement, select-option enforcement, number/boolean casting.
+
+### 28.4 Acceptance checklist (delta)
+
+- [ ] `php artisan test` reports **>=188** passing; `vendor/bin/pint --dirty` clean.
+- [ ] `reports.view` + `custom-fields.manage` seed (their modules exist); analytics page and PDF require both the `advanced_analytics` feature and `reports.view`.
+- [ ] Attachments upload to a private tenant path, download only via a signed link with `view` on the parent, respect the per-tenant quota, and delete with the parent's `update`.
+- [ ] Custom-field definitions drive dynamic form rendering, validation runs before persistence, and values display typed on show pages.
