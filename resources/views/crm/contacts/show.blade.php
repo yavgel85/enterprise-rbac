@@ -17,4 +17,8 @@
         <div class="flex"><span class="w-32 text-gray-500">Email</span><span>{{ $contact->email ?? '—' }}</span></div>
         <div class="flex"><span class="w-32 text-gray-500">Phone</span><span>{{ $contact->phone ?? '—' }}</span></div>
     </div>
+
+    @include('crm._custom-fields-show', ['model' => $contact, 'modelType' => \App\Models\Contact::class])
+
+    @include('crm._attachments', ['attachable' => $contact, 'attachableType' => 'contact', 'tenant' => $tenant])
 @endsection

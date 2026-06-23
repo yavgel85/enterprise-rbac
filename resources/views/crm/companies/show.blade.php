@@ -43,4 +43,8 @@
             </div>
         </div>
     </div>
+
+    @include('crm._custom-fields-show', ['model' => $company, 'modelType' => \App\Models\Company::class])
+
+    @include('crm._attachments', ['attachable' => $company, 'attachableType' => 'company', 'tenant' => $tenant])
 @endsection

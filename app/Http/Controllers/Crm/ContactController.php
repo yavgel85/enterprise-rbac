@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Crm;
 
+use App\Actions\CustomField\SyncCustomFields;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ContactRequest;
 use App\Models\Company;
@@ -38,13 +39,17 @@ class ContactController extends Controller
         ]);
     }
 
-    public function store(ContactRequest $request, Tenant $tenant): RedirectResponse
+    public function store(ContactRequest $request, SyncCustomFields $customFields, Tenant $tenant): RedirectResponse
     {
         $this->authorize('create', Contact::class);
+
+        $request->validate($customFields->rules(Contact::class));
 
         $contact = Contact::create($request->validated() + [
             'created_by' => $request->user()->id,
         ]);
+
+        $customFields->persist($contact, $request->input('custom_fields', []));
 
         return redirect()->route('crm.contacts.show', [$tenant, $contact])
             ->with('status', 'Contact created.');
@@ -71,11 +76,15 @@ class ContactController extends Controller
         ]);
     }
 
-    public function update(ContactRequest $request, Tenant $tenant, Contact $contact): RedirectResponse
+    public function update(ContactRequest $request, SyncCustomFields $customFields, Tenant $tenant, Contact $contact): RedirectResponse
     {
         $this->authorize('update', $contact);
 
+        $request->validate($customFields->rules(Contact::class));
+
         $contact->update($request->validated());
+
+        $customFields->persist($contact, $request->input('custom_fields', []));
 
         return redirect()->route('crm.contacts.show', [$tenant, $contact])
             ->with('status', 'Contact updated.');

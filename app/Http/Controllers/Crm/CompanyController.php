@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Crm;
 
+use App\Actions\CustomField\SyncCustomFields;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CompanyRequest;
 use App\Models\Company;
@@ -35,13 +36,17 @@ class CompanyController extends Controller
         return view('crm.companies.create', compact('tenant', 'users'));
     }
 
-    public function store(CompanyRequest $request, Tenant $tenant): RedirectResponse
+    public function store(CompanyRequest $request, SyncCustomFields $customFields, Tenant $tenant): RedirectResponse
     {
         $this->authorize('create', Company::class);
+
+        $request->validate($customFields->rules(Company::class));
 
         $company = Company::create($request->validated() + [
             'created_by' => $request->user()->id,
         ]);
+
+        $customFields->persist($company, $request->input('custom_fields', []));
 
         return redirect()->route('crm.companies.show', [$tenant, $company])
             ->with('status', 'Company created.');
@@ -65,11 +70,15 @@ class CompanyController extends Controller
         return view('crm.companies.edit', compact('company', 'tenant', 'users'));
     }
 
-    public function update(CompanyRequest $request, Tenant $tenant, Company $company): RedirectResponse
+    public function update(CompanyRequest $request, SyncCustomFields $customFields, Tenant $tenant, Company $company): RedirectResponse
     {
         $this->authorize('update', $company);
 
+        $request->validate($customFields->rules(Company::class));
+
         $company->update($request->validated());
+
+        $customFields->persist($company, $request->input('custom_fields', []));
 
         return redirect()->route('crm.companies.show', [$tenant, $company])
             ->with('status', 'Company updated.');

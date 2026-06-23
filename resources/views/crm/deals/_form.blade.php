@@ -46,6 +46,14 @@
             class="mt-1 block w-full rounded-md border-gray-300 shadow-sm px-3 py-2 border">
     </div>
 
+    <div class="sm:col-span-2">
+        <label class="block text-sm font-medium text-gray-700">Lost reason <span class="text-gray-400">(required when stage is "Lost")</span></label>
+        <input type="text" name="lost_reason" value="{{ old('lost_reason', $values?->lost_reason) }}"
+            placeholder="e.g. Price, Competitor, No budget, Timing"
+            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm px-3 py-2 border">
+        @error('lost_reason') <p class="mt-1 text-sm text-red-600">{{ $message }}</p> @enderror
+    </div>
+
     <div>
         <label class="block text-sm font-medium text-gray-700">Company</label>
         <select name="company_id" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm px-3 py-2 border">
@@ -84,3 +92,5 @@
         </select>
     </div>
 </div>
+
+@include('crm._custom-fields', ['model' => $values, 'modelType' => \App\Models\Deal::class])

@@ -8,6 +8,7 @@ use App\Actions\Approvals\RequestApproval;
 use App\Actions\Audit\LogAuditEvent;
 use App\Actions\Authorization\GrantResourcePermission;
 use App\Actions\Authorization\RevokeResourcePermission;
+use App\Actions\CustomField\SyncCustomFields;
 use App\Enums\ApprovalStatus;
 use App\Enums\AuditAction;
 use App\Enums\DealStage;
@@ -49,13 +50,17 @@ class DealController extends Controller
         return view('crm.deals.create', $this->formData($tenant));
     }
 
-    public function store(DealRequest $request, Tenant $tenant): RedirectResponse
+    public function store(DealRequest $request, SyncCustomFields $customFields, Tenant $tenant): RedirectResponse
     {
         $this->authorize('create', Deal::class);
+
+        $request->validate($customFields->rules(Deal::class));
 
         $deal = Deal::create($request->validated() + [
             'created_by' => $request->user()->id,
         ]);
+
+        $customFields->persist($deal, $request->input('custom_fields', []));
 
         return redirect()->route('crm.deals.show', [$tenant, $deal])
             ->with('status', 'Deal created.');
@@ -93,11 +98,15 @@ class DealController extends Controller
         return view('crm.deals.edit', $this->formData($tenant, $deal));
     }
 
-    public function update(DealRequest $request, Tenant $tenant, Deal $deal): RedirectResponse
+    public function update(DealRequest $request, SyncCustomFields $customFields, Tenant $tenant, Deal $deal): RedirectResponse
     {
         $this->authorize('update', $deal);
 
+        $request->validate($customFields->rules(Deal::class));
+
         $deal->update($request->validated());
+
+        $customFields->persist($deal, $request->input('custom_fields', []));
 
         return redirect()->route('crm.deals.show', [$tenant, $deal])
             ->with('status', 'Deal updated.');

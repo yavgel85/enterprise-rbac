@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Crm;
 
 use App\Actions\Audit\LogAuditEvent;
+use App\Actions\CustomField\SyncCustomFields;
 use App\Enums\AuditAction;
 use App\Enums\TaskStatus;
 use App\Http\Controllers\Controller;
@@ -39,13 +40,17 @@ class TaskController extends Controller
         ]);
     }
 
-    public function store(TaskRequest $request, Tenant $tenant): RedirectResponse
+    public function store(TaskRequest $request, SyncCustomFields $customFields, Tenant $tenant): RedirectResponse
     {
         $this->authorize('create', Task::class);
+
+        $request->validate($customFields->rules(Task::class));
 
         $task = Task::create($request->validated() + [
             'created_by' => $request->user()->id,
         ]);
+
+        $customFields->persist($task, $request->input('custom_fields', []));
 
         return redirect()->route('crm.tasks.show', [$tenant, $task])
             ->with('status', 'Task created.');
@@ -71,11 +76,15 @@ class TaskController extends Controller
         ]);
     }
 
-    public function update(TaskRequest $request, Tenant $tenant, Task $task): RedirectResponse
+    public function update(TaskRequest $request, SyncCustomFields $customFields, Tenant $tenant, Task $task): RedirectResponse
     {
         $this->authorize('update', $task);
 
+        $request->validate($customFields->rules(Task::class));
+
         $task->update($request->validated());
+
+        $customFields->persist($task, $request->input('custom_fields', []));
 
         return redirect()->route('crm.tasks.show', [$tenant, $task])
             ->with('status', 'Task updated.');

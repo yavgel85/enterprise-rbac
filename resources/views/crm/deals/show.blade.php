@@ -85,4 +85,8 @@
             </form>
         </div>
     @endif
+
+    @include('crm._custom-fields-show', ['model' => $deal, 'modelType' => \App\Models\Deal::class])
+
+    @include('crm._attachments', ['attachable' => $deal, 'attachableType' => 'deal', 'tenant' => $tenant])
 @endsection

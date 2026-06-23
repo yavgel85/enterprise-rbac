@@ -26,4 +26,8 @@
         <div class="flex"><span class="w-32 text-gray-500">Completed</span><span>{{ $task->completed_at?->format('Y-m-d H:i') ?? '—' }}</span></div>
         <div><span class="text-gray-500 block mb-1">Description</span><div class="whitespace-pre-wrap">{{ $task->description ?? '—' }}</div></div>
     </div>
+
+    @include('crm._custom-fields-show', ['model' => $task, 'modelType' => \App\Models\Task::class])
+
+    @include('crm._attachments', ['attachable' => $task, 'attachableType' => 'task', 'tenant' => $tenant])
 @endsection

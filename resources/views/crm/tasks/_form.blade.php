@@ -38,3 +38,5 @@
         </select>
     </div>
 </div>
+
+@include('crm._custom-fields', ['model' => $values, 'modelType' => \App\Models\Task::class])
